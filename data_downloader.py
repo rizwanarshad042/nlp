@@ -192,7 +192,7 @@ def scrape_fact_check_page(url, output_file_name, source_name=None, expected_lab
                 text = element.get_text(strip=True)
                 
                 # Filter out navigation, copyright, and very short text
-                if (len(text) < 50 or 
+                if (len(text) < 40 or 
                     '©' in text or 
                     'cookie' in text.lower() or
                     'privacy policy' in text.lower() or
