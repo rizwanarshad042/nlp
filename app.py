@@ -620,39 +620,50 @@ def classification_page():
                     else:
                         st.info(f"Prediction: **{best_label.title()}** ({best_confidence:.2%}) - Low confidence")
 
-            # Final prediction: Weighted ensemble using all available models
+            # Final prediction: Use BioBERT if available, otherwise use weighted ensemble
             st.markdown("---")
             st.subheader("Final Prediction")
             
-            # Always use weighted ensemble with all available models
-            model_weights = {
-                "BioBERT": 0.55,
-                "LSTM": 0.20,
-                "CNN": 0.10,
-                "ML Models": 0.15
-            }
-        
-            weighted_scores = {"credible": 0.0, "misleading": 0.0, "false": 0.0}
-            total_weight = 0.0
-            models_used = []
+            # Priority: BioBERT > Weighted Ensemble > Single Model
+            if "BioBERT" in all_predictions:
+                # Use BioBERT as final prediction (highest priority)
+                biobert_preds = all_predictions["BioBERT"]
+                final_label = max(biobert_preds.keys(), key=lambda k: biobert_preds[k])
+                final_confidence = biobert_preds[final_label]
+                st.caption("Using BioBERT (Transformer) model prediction")
+            elif len(all_predictions) > 1:
+                # Fallback to weighted ensemble
+                model_weights = {
+                    "BioBERT": 0.55,
+                    "LSTM": 0.20,
+                    "CNN": 0.10,
+                    "ML Models": 0.15
+                }
             
-            for model_name, predictions in all_predictions.items():
-                weight = model_weights.get(model_name, 0.0)
-                if weight > 0:
-                    models_used.append(f"{model_name} ({int(weight*100)}%)")
-                    for label in ["credible", "misleading", "false"]:
-                        weighted_scores[label] += predictions.get(label, 0.0) * weight
-                    total_weight += weight
-            
-            # Normalize if total weight < 1.0 (some models missing)
-            if total_weight > 0 and total_weight < 1.0:
-                for label in weighted_scores:
-                    weighted_scores[label] /= total_weight
-            
-            if total_weight > 0:
+                weighted_scores = {"credible": 0.0, "misleading": 0.0, "false": 0.0}
+                total_weight = 0.0
+                
+                for model_name, predictions in all_predictions.items():
+                    weight = model_weights.get(model_name, 0.0)
+                    if weight > 0:
+                        for label in ["credible", "misleading", "false"]:
+                            weighted_scores[label] += predictions.get(label, 0.0) * weight
+                        total_weight += weight
+                
+                if total_weight > 0:
+                    if total_weight < 1.0:
+                        for label in weighted_scores:
+                            weighted_scores[label] /= total_weight
+                
                 final_label = max(weighted_scores.keys(), key=lambda k: weighted_scores[k])
                 final_confidence = weighted_scores[final_label]
-                st.caption(f"Weighted ensemble using: {', '.join(models_used)}")
+                st.caption("Using weighted ensemble (BioBERT not available)")
+            elif len(all_predictions) == 1:
+                # Only one model available
+                single_model_preds = list(all_predictions.values())[0]
+                final_label = max(single_model_preds.keys(), key=lambda k: single_model_preds[k])
+                final_confidence = single_model_preds[final_label]
+                st.caption(f"Using {list(all_predictions.keys())[0]} model")
             else:
                 final_label = None
                 final_confidence = 0.0
