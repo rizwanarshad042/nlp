@@ -26,7 +26,7 @@ DELAY_SECONDS = 3
 
 def is_url_accessible(url):
     try:
-        response = requests.head(url, allow_redirects=True, timeout=15)
+        response = requests.head(url, allow_redirects=True, timeout=20)
         if response.status_code < 400:
             return True
         print(f"      {url} returned status {response.status_code}. Skipping.")
