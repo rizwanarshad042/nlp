@@ -1,9 +1,3 @@
-"""
-Utility for storing and retrieving statement-label feedback pairs
-Stores feedback directly in the training dataset (medical_dataset.csv)
-Supports similarity-based matching for similar statements
-"""
-
 import pandas as pd
 import os
 from typing import Optional, Tuple
@@ -17,7 +11,6 @@ FEEDBACK_SOURCE = "ai_feedback"
 SIMILARITY_THRESHOLD = 0.75
 
 def _normalize_text(text: str) -> str:
-    """Normalize text for comparison"""
     return text.strip().lower()
 
 def get_stored_label(statement: str, use_similarity: bool = True) -> Optional[Tuple[str, float]]:

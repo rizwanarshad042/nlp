@@ -7,10 +7,14 @@ from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
 import warnings
+import numpy as np
+np.warnings = warnings
 
-# Suppress sklearn version warnings
 warnings.filterwarnings('ignore', category=UserWarning, module='sklearn')
 warnings.filterwarnings('ignore', message='.*InconsistentVersionWarning.*')
+warnings.filterwarnings('ignore', message='.*node array.*')
+
+os.environ['SKLEARN_ALLOW_DEPRECATED_SKLEARN_PACKAGE_INSTALL'] = 'True'
 
 from utils.labels import LABELS, LABEL_TO_ID, ID_TO_LABEL
 from utils.disease_integration import classify_with_disease_context, get_top_myths_and_facts, extract_disease_from_text
@@ -44,7 +48,6 @@ except ImportError:
 
 
 def check_ai_availability():
-    """Check if Groq AI explanation service is available"""
     groq_available, groq_message = check_gemini_api_key()
     
     if groq_available:
@@ -55,7 +58,6 @@ def check_ai_availability():
 
 @st.cache_resource
 def load_transformer_model():
-    """Load the fine-tuned BioBERT model."""
     if not TRANSFORMER_AVAILABLE:
         return None, None
     
@@ -86,43 +88,116 @@ def load_transformer_model():
 
 @st.cache_resource
 def load_ml_models():
-    """Load comprehensive ML models (Logistic Regression and Random Forest) trained on all datasets."""
     if not ML_AVAILABLE:
         return None, None, None
     
     models_dir = "models/ml"
+    
+    # Check if models directory exists
+    if not os.path.exists(models_dir):
+        st.error(f"Models directory not found: {models_dir}")
+        st.info("Please train the models first by running: python train_all_models.py")
+        return None, None, None
+    
     try:
+        # Load vectorizer with encoding compatibility
         vectorizer_path = os.path.join(models_dir, "tfidf_vectorizer.pkl")
         if not os.path.exists(vectorizer_path):
             st.error(f"Vectorizer not found at {vectorizer_path}")
+            st.info("Models need to be trained. Run: python train_all_models.py")
             return None, None, None
-        vectorizer = joblib.load(vectorizer_path)
         
+        try:
+            vectorizer = joblib.load(vectorizer_path)
+        except Exception as vec_error:
+            # Try with explicit encoding
+            try:
+                import pickle
+                with open(vectorizer_path, 'rb') as f:
+                    vectorizer = pickle.load(f, encoding='latin1')
+            except:
+                st.error(f"Vectorizer version incompatibility: {vec_error}")
+                st.info("Please retrain models with current Python/sklearn version")
+                return None, None, None
+        
+        # Load Logistic Regression with version handling
         comprehensive_lr_path = os.path.join(models_dir, "logistic_regression.pkl")
         original_lr_path = os.path.join(models_dir, "logreg.pkl")
         
+        logreg = None
         if os.path.exists(comprehensive_lr_path):
-            logreg = joblib.load(comprehensive_lr_path)
+            try:
+                logreg = joblib.load(comprehensive_lr_path)
+            except Exception as lr_error:
+                try:
+                    import pickle
+                    with open(comprehensive_lr_path, 'rb') as f:
+                        logreg = pickle.load(f, encoding='latin1')
+                except:
+                    st.error(f"Logistic Regression version incompatibility: {lr_error}")
+                    st.info("Please retrain models with: python train_all_models.py")
+                    return None, None, None
         elif os.path.exists(original_lr_path):
-            logreg = joblib.load(original_lr_path)
+            try:
+                logreg = joblib.load(original_lr_path)
+            except Exception as lr_error:
+                try:
+                    import pickle
+                    with open(original_lr_path, 'rb') as f:
+                        logreg = pickle.load(f, encoding='latin1')
+                except:
+                    st.error(f"Logistic Regression version incompatibility: {lr_error}")
+                    st.info("Please retrain models with: python train_all_models.py")
+                    return None, None, None
         else:
             st.error("No Logistic Regression model found")
+            st.info("Train models by running: python train_all_models.py")
             return None, None, None
         
+        # Load Random Forest with version handling and numpy dtype fix
         rf_path = os.path.join(models_dir, "random_forest.pkl")
         if not os.path.exists(rf_path):
             st.error(f"Random Forest model not found at {rf_path}")
+            st.info("Train models by running: python train_all_models.py")
             return None, None, None
-        rf = joblib.load(rf_path)
+        
+        try:
+            # First attempt: standard loading
+            rf = joblib.load(rf_path)
+        except Exception as rf_error:
+            # Check if it's a numpy dtype issue
+            if "dtype" in str(rf_error).lower() or "node array" in str(rf_error).lower():
+                st.warning("Random Forest has numpy dtype issue. Attempting compatibility fix...")
+                try:
+                    # Try loading with sklearn's old format
+                    import pickle
+                    with open(rf_path, 'rb') as f:
+                        rf = pickle.load(f)
+                except:
+                    st.error(f"Random Forest dtype incompatibility: {rf_error}")
+                    st.error("This is a numpy 2.x vs 1.x compatibility issue")
+                    st.info("Solution: Retrain models in your current environment:")
+                    st.code("python train_all_models.py", language="bash")
+                    return None, None, None
+            else:
+                try:
+                    import pickle
+                    with open(rf_path, 'rb') as f:
+                        rf = pickle.load(f, encoding='latin1')
+                except:
+                    st.error(f"Random Forest version incompatibility: {rf_error}")
+                    st.info("Please retrain models with: python train_all_models.py")
+                    return None, None, None
         
         return vectorizer, logreg, rf
+        
     except Exception as e:
         st.error(f"Error loading ML models: {e}")
+        st.info("Solution: Retrain models with your current environment by running: python train_all_models.py")
         return None, None, None
 
 
 class CNNClassifier(nn.Module):
-    """CNN-based Deep Learning Model (must match training architecture)."""
 
     def __init__(self, vocab_size, embedding_dim=128, num_filters=100, filter_sizes=(3, 4, 5), num_classes=3, dropout=0.5):
         super().__init__()
@@ -148,7 +223,6 @@ class CNNClassifier(nn.Module):
 
 
 class LSTMClassifier(nn.Module):
-    """LSTM-based Deep Learning Model (must match training architecture)."""
 
     def __init__(self, vocab_size, embedding_dim=128, hidden_dim=256, num_layers=2, num_classes=3, dropout=0.5):
         super().__init__()
@@ -175,11 +249,6 @@ class LSTMClassifier(nn.Module):
 
 @st.cache_resource
 def load_dl_models():
-    """
-    Load CNN and LSTM deep learning models plus vocabulary for live inference.
-    Requires `models/dl/vocab.json`, `cnn_best.pt`, and `lstm_best.pt`.
-    If vocab.json is missing, creates a default vocabulary from the dataset.
-    """
     if not TORCH_AVAILABLE:
         return None
 
@@ -453,7 +522,7 @@ def classification_page():
     ai_available, ai_message, ai_provider = check_ai_availability()
     
     if not ai_available:
-        st.warning(f"⚠️ AI Integration Unavailable: {ai_message}")
+        st.warning(f"AI Integration Unavailable: {ai_message}")
         st.info("💡 AI explanations are disabled. Set up Groq API key in api_keys.py to enable AI-powered explanations.")
     
     st.markdown("---")
@@ -496,7 +565,7 @@ def classification_page():
                     all_predictions["BioBERT"] = transformer_pred
                     ordered_predictions["BioBERT"] = transformer_pred
             else:
-                st.warning("⚠️ BioBERT model not available")
+                st.warning("BioBERT model not available")
             
             # 2. Load DL models (CNN, LSTM)
             if dl_bundle is not None:
@@ -506,7 +575,7 @@ def classification_page():
                         all_predictions[model_name] = preds
                         ordered_predictions[model_name] = preds
             else:
-                st.warning("⚠️ DL models not available")
+                st.warning("DL models not available")
             
             # 3. Load ML models last
             if vectorizer is not None and logreg is not None and rf is not None:
@@ -515,7 +584,7 @@ def classification_page():
                     all_predictions["ML Models"] = ml_pred
                     ordered_predictions["ML Models"] = ml_pred
             else:
-                st.warning("⚠️ ML models not available")
+                st.warning("ML models not available")
             
             if not all_predictions:
                 st.error("No trained models available. Please train models first.")
@@ -783,7 +852,7 @@ def classification_page():
                         # Check if we have pre-replaced myths and facts from unknown disease handler
                         if disease_info.get('myths_with_replacement') or disease_info.get('facts_with_replacement'):
                             # Display custom myths and facts with replaced names
-                            st.markdown(f"### 📊 Information about {disease.title()}")
+                            st.markdown(f"### Information about {disease.title()}")
                             
                             if matched_disease:
                                 similarity_score = disease_info.get('similarity_score', 0)
@@ -871,7 +940,7 @@ def classification_page():
                         elif best_overall_label == "misleading":
                             st.markdown("""
                             <div style='background-color: #3d2f1f; padding: 20px; border-radius: 10px; border-left: 5px solid #FF9800; margin: 10px 0;'>
-                                <h4 style='color: #FF9800; margin-top: 0;'>⚠️ Misleading Statement Explanation</h4>
+                                <h4 style='color: #FF9800; margin-top: 0;'>Misleading Statement Explanation</h4>
                                 <p style='color: #e0e0e0; line-height: 1.6;'>{}</p>
                             </div>
                             """.format(explanation.replace('\n', '<br>')), unsafe_allow_html=True)
@@ -889,7 +958,7 @@ def classification_page():
                                 if ai_label and ai_label != best_overall_label:
                                     st.markdown("""
                                     <div style='background-color: #3d2f1f; padding: 15px; border-radius: 8px; border-left: 5px solid #FF9800; margin: 10px 0;'>
-                                        <p style='color: #FF9800; margin: 0;'><strong>⚠️ Discrepancy Detected:</strong> Model predicted '<strong>{}</strong>' but AI classified as '<strong>{}</strong>'. Storing AI's classification for future use.</p>
+                                        <p style='color: #FF9800; margin: 0;'><strong>Discrepancy Detected:</strong> Model predicted '<strong>{}</strong>' but AI classified as '<strong>{}</strong>'. Storing AI's classification for future use.</p>
                                     </div>
                                     """.format(best_overall_label.title(), ai_label.title()), unsafe_allow_html=True)
                                     
@@ -927,7 +996,7 @@ def classification_page():
                                     </div>
                                     """.format(ai_label.title(), topic, disease_tag or 'N/A'), unsafe_allow_html=True)
                                 elif ai_label and ai_label == best_overall_label:
-                                    st.info(f"✓ AI classification matches model prediction: **{ai_label.title()}**")
+                                    st.info(f"AI classification matches model prediction: **{ai_label.title()}**")
                             except Exception as e:
                                 import traceback
                                 print(f"Error in AI comparison: {e}")
@@ -1041,7 +1110,7 @@ def disease_symptoms_page():
                                     st.success(f"✅ {message}")
                                     st.info("🎉 Your dataset now has comprehensive content for this disease!")
                                 else:
-                                    st.warning(f"⚠️ Bulk content generation failed: {message}")
+                                    st.warning(f"Bulk content generation failed: {message}")
                                     st.info("💡 Disease symptoms were still saved successfully")
                             
                             st.session_state.ai_symptoms_generated = False
@@ -1059,7 +1128,7 @@ def disease_symptoms_page():
                 # No symptoms input field needed for AI query
                 new_symptoms = ""  # Set empty since AI will handle it
             else:
-                st.warning("⚠️ AI not available: " + ai_message)
+                st.warning("AI not available: " + ai_message)
                 st.info("💡 Set GROQ_API_KEY (free) or OPENAI_API_KEY to enable AI symptom queries")
                 new_symptoms = st.text_area("Symptoms (comma-separated)", placeholder="Enter symptoms manually")
     
@@ -1090,7 +1159,7 @@ def disease_symptoms_page():
                                 st.success(f"✅ {message}")
                                 st.info("🎉 Your dataset now has comprehensive content for this disease!")
                             else:
-                                st.warning(f"⚠️ Bulk content generation failed: {message}")
+                                st.warning(f"Bulk content generation failed: {message}")
                                 st.info("💡 Disease symptoms were still saved successfully")
                     else:
                         st.info("💡 AI not available for bulk content generation, but disease was saved successfully")
@@ -1201,7 +1270,7 @@ def rag_comparison_page():
     comparison_df = pd.read_csv(comparison_path)
     detailed_df = pd.read_csv(detailed_path) if os.path.exists(detailed_path) else None
     
-    st.subheader("📊 Summary Comparison")
+    st.subheader("Summary Comparison")
     st.caption("Average metrics across 50 QA pairs evaluated")
     
     # Get data
@@ -1341,13 +1410,13 @@ def rag_comparison_page():
     with col1:
         st.success("**RAG Advantages:**")
         if rag_row['Factuality'] > baseline_row['Factuality']:
-            st.write(f"✓ **Factuality**: {((rag_row['Factuality'] / baseline_row['Factuality'] - 1) * 100):.1f}% higher")
+            st.write(f"**Factuality**: {((rag_row['Factuality'] / baseline_row['Factuality'] - 1) * 100):.1f}% higher")
         if rag_row['Completeness'] > baseline_row['Completeness']:
-            st.write(f"✓ **Completeness**: {((rag_row['Completeness'] / baseline_row['Completeness'] - 1) * 100):.1f}% higher")
+            st.write(f"**Completeness**: {((rag_row['Completeness'] / baseline_row['Completeness'] - 1) * 100):.1f}% higher")
         if rag_row['Faithfulness'] > baseline_row['Faithfulness']:
-            st.write(f"✓ **Faithfulness**: Perfect (1.0) - All answers grounded in retrieved sources")
+            st.write(f"**Faithfulness**: Perfect (1.0) - All answers grounded in retrieved sources")
         if rag_row['Safety'] == baseline_row['Safety']:
-            st.write(f"✓ **Safety**: Both models are safe (1.0)")
+            st.write(f"**Safety**: Both models are safe (1.0)")
     
     with col2:
         st.info("**Non-RAG Baseline:**")
@@ -1392,7 +1461,7 @@ def rag_comparison_page():
                 st.markdown("---")
         
         # Summary statistics
-        st.subheader("📊 Summary Statistics")
+        st.subheader("Summary Statistics")
         
         summary_cols = st.columns(4)
         

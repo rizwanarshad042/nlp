@@ -72,7 +72,7 @@ class TextDataset(Dataset):
 # Think of this as sliding small windows over the sentence to find useful phrases.
 class CNNClassifier(nn.Module):
     """CNN text classifier that looks for short local patterns with different kernel sizes."""
-    def __init__(self, vocab_size, embedding_dim=128, num_filters=100, filter_sizes=[3, 4, 5], num_classes=3, dropout=0.5):
+    def __init__(self, vocab_size, embedding_dim=128, num_filters=100, filter_sizes=[3, 4, 5], num_classes=3, dropout=0.6):
         super(CNNClassifier, self).__init__()
         # Convert word IDs to dense embedding vectors
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
@@ -108,7 +108,7 @@ class CNNClassifier(nn.Module):
 # This one reads the sentence forwards and backwards so it can use context from both sides.
 class LSTMClassifier(nn.Module):
     """Bi‑LSTM text classifier that understands word order and longer‑range context."""
-    def __init__(self, vocab_size, embedding_dim=128, hidden_dim=256, num_layers=2, num_classes=3, dropout=0.5):
+    def __init__(self, vocab_size, embedding_dim=128, hidden_dim=256, num_layers=2, num_classes=3, dropout=0.6):
         super(LSTMClassifier, self).__init__()
         # Word ID → embedding vector
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
@@ -255,7 +255,9 @@ def train_ml_models(X_train, X_test, y_train, y_test, label_encoder):
     lr_model = LogisticRegression(
         max_iter=1000,  # Maximum training iterations
         random_state=42,  # For reproducibility
-        class_weight='balanced'  # Handle class imbalance
+        class_weight='balanced',  # Handle class imbalance
+        C=0.5,  # Stronger L2 regularization (lower C = more regularization)
+        penalty='l2'  # L2 regularization to prevent overfitting
     )
     # Train the model
     lr_model.fit(X_train_tfidf, y_train)
@@ -281,8 +283,11 @@ def train_ml_models(X_train, X_test, y_train, y_test, label_encoder):
     # Model 2: Random Forest
     print("\n2. Training Random Forest...")
     rf_model = RandomForestClassifier(
-        n_estimators=200,
-        max_depth=50,
+        n_estimators=100,  # Reduced from 200 to prevent overfitting
+        max_depth=20,  # Reduced from 50 to limit tree complexity
+        min_samples_split=10,  # Require more samples to split
+        min_samples_leaf=5,  # Require more samples in leaf nodes
+        max_features='sqrt',  # Use subset of features
         random_state=42,
         class_weight='balanced',
         n_jobs=-1
@@ -389,12 +394,14 @@ def train_dl_models(X_train, X_val, X_test, y_train, y_val, y_test, label_encode
 def train_pytorch_model(model, X_train, X_val, X_test, y_train, y_val, y_test, device, model_name, label_encoder):
     """Train a PyTorch model with training/validation tracking"""
     model = model.to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    # Add label smoothing to reduce overconfidence (0.1 means 90% confidence max)
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+    # Lower learning rate and add weight decay for regularization
+    optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=0.01)
     
     batch_size = 32
-    num_epochs = 10
-    patience = 3
+    num_epochs = 15  # Increased epochs for better convergence
+    patience = 5  # More patience to avoid early stopping too soon
     best_val_loss = float('inf')
     patience_counter = 0
     
@@ -641,7 +648,7 @@ def train_transformer_model(X_train, X_val, X_test, y_train, y_val, y_test, labe
         setattr(import_utils, 'check_torch_load_is_safe', original_check)
     
     model.to(device)  # Explicitly move model to GPU if available
-    print("✓ Model loaded and moved to GPU")
+    print("Model loaded and moved to GPU")
     
     # Set up training settings
     # Use larger batches if we have a GPU
@@ -650,11 +657,12 @@ def train_transformer_model(X_train, X_val, X_test, y_train, y_val, y_test, labe
     
     training_args = TrainingArguments(
         output_dir='models/transformer/biobert_training',
-        num_train_epochs=3,  # Train for 3 passes over the data
+        num_train_epochs=4,  # Increased from 3 to 4 epochs
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
         warmup_steps=500,  # Slowly increase learning rate
-        weight_decay=0.01,
+        weight_decay=0.05,  # Increased from 0.01 to 0.05 for stronger regularization
+        learning_rate=2e-5,  # Lower learning rate for better convergence
         logging_dir='logs/transformer',
         logging_steps=100,
         eval_strategy='epoch',  # Check performance every epoch
@@ -664,6 +672,7 @@ def train_transformer_model(X_train, X_val, X_test, y_train, y_val, y_test, labe
         greater_is_better=False,  # Lower loss is better
         fp16=torch.cuda.is_available(),  # Use mixed precision for speed (if GPU)
         dataloader_num_workers=4 if torch.cuda.is_available() else 0,
+        label_smoothing_factor=0.1,  # Add label smoothing to reduce overconfidence
     )
     
     # Compute metrics function

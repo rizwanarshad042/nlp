@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-RAG vs Non-RAG Evaluation Script (Local)
-Evaluates RAG and non-RAG baseline models on QA pairs.
-"""
 
 import os
 import pandas as pd
@@ -14,11 +10,9 @@ print("=" * 60)
 print("RAG vs Non-RAG Evaluation (Local)")
 print("=" * 60)
 
-# Find files
 qa_path = None
 kb_path = None
 
-# Check common locations
 possible_qa_paths = [
     'data/processed/qa_pairs_100.csv',
     'qa_pairs_100.csv',
@@ -36,17 +30,17 @@ possible_kb_paths = [
 for path in possible_qa_paths:
     if os.path.exists(path):
         qa_path = path
-        print(f"✓ Found QA pairs: {qa_path}")
+        print(f"Found QA pairs: {qa_path}")
         break
 
 for path in possible_kb_paths:
     if os.path.exists(path):
         kb_path = path
-        print(f"✓ Found knowledge base: {kb_path}")
+        print(f"Found knowledge base: {kb_path}")
         break
 
 if not qa_path:
-    print("\n✗ ERROR: qa_pairs_100.csv not found!")
+    print("\nERROR: qa_pairs_100.csv not found!")
     print("Please place qa_pairs_100.csv in one of these locations:")
     for path in possible_qa_paths:
         print(f"  - {path}")
@@ -55,7 +49,7 @@ if not qa_path:
     exit(1)
 
 if not kb_path:
-    print("\n✗ ERROR: medical_dataset.csv not found!")
+    print("\nERROR: medical_dataset.csv not found!")
     print("Please place medical_dataset.csv in one of these locations:")
     for path in possible_kb_paths:
         print(f"  - {path}")
@@ -71,13 +65,26 @@ print(f"Loaded {len(qa_df)} QA pairs")
 kb_df = pd.read_csv(kb_path)
 print(f"Loaded {len(kb_df)} knowledge base records")
 
-# Filter credible texts for RAG retrieval
-credible_texts = kb_df[kb_df['label'] == 'credible']['text'].dropna().tolist()
-print(f"Using {len(credible_texts)} credible texts for RAG retrieval")
+credible_df = kb_df[kb_df['label'] == 'credible'].copy()
+print(f"Found {len(credible_df)} credible records")
 
-if len(credible_texts) > 20000:
-    credible_texts = credible_texts[:20000]
-    print(f"Limited to top 20,000 texts for efficiency")
+if 'source' in credible_df.columns:
+    credible_df = credible_df[~credible_df['source'].str.contains('synthetic|ai_generated|augmented', case=False, na=False)]
+    print(f"After removing synthetic sources: {len(credible_df)} records")
+
+credible_df = credible_df[~credible_df['text'].str.contains('Medical fact about|This information is supported by scientific evidence', case=False, na=False)]
+print(f"After removing template texts: {len(credible_df)} records")
+
+credible_df = credible_df[credible_df['text'].str.len() > 100]
+print(f"After length filter (>100 chars): {len(credible_df)} records")
+
+credible_texts = credible_df['text'].dropna().tolist()
+
+if len(credible_texts) > 15000:
+    credible_texts = credible_texts[:15000]
+    print(f"Limited to top 15,000 texts for efficiency")
+    
+print(f"Using {len(credible_texts)} high-quality credible texts for RAG retrieval")
 
 print("\n" + "=" * 60)
 print("Building RAG System")
@@ -85,30 +92,54 @@ print("=" * 60)
 
 vectorizer = TfidfVectorizer(stop_words='english', max_features=50000)
 kb_matrix = vectorizer.fit_transform(credible_texts)
-print("✓ TF-IDF vectorizer trained on knowledge base")
+print("TF-IDF vectorizer trained on knowledge base")
 
 harmful_terms = ['drink bleach', 'poison', 'dangerous advice', 'no treatment needed']
 
 
-def rag_answer(question, top_k=3):
-    """RAG system: retrieves relevant passages and returns concatenated answer."""
+def rag_answer(question, top_k=5):
     q_vec = vectorizer.transform([question])
     sims = cosine_similarity(q_vec, kb_matrix)[0]
     top_idx = sims.argsort()[-top_k:][::-1]
     retrieved = [credible_texts[i] for i in top_idx]
-    answer = " ".join(retrieved)
+    
+    best_matches = []
+    for i, text in enumerate(retrieved):
+        if sims[top_idx[i]] > 0.1:
+            best_matches.append(text[:500])
+    
+    if best_matches:
+        answer = " ".join(best_matches[:3])
+    else:
+        answer = "Based on medical evidence: " + retrieved[0][:300]
+    
     return answer, retrieved
 
 
 def baseline_answer(question):
-    """Non-RAG baseline: returns generic safe response."""
-    answer = ("Further medical evaluation is required. Consult verified health sources "
-              "such as WHO/CDC for precise guidance.")
+    question_lower = question.lower()
+    
+    topic_responses = {
+        'covid': 'COVID-19 is a respiratory illness caused by SARS-CoV-2 virus. Symptoms include fever, cough, difficulty breathing. Vaccines are available and effective. Consult WHO/CDC for latest guidance.',
+        'vaccine': 'Vaccines are safe and effective at preventing serious illness. Common side effects are mild and temporary. Consult healthcare providers for vaccination schedule.',
+        'mask': 'Masks help prevent spread of respiratory illnesses by blocking droplets. Medical and N95 masks are most effective. Follow CDC guidelines for proper mask usage.',
+        'cancer': 'Cancer treatment should be supervised by oncologists. Options include surgery, chemotherapy, radiation, and immunotherapy. Early detection improves outcomes.',
+        'diabetes': 'Diabetes requires medical management including blood sugar monitoring, medication, diet, and exercise. Consult endocrinologist for treatment plan.',
+        'heart': 'Heart disease requires medical evaluation and treatment. Risk factors include high blood pressure, cholesterol, smoking. Follow cardiologist recommendations.',
+        'flu': 'Influenza is treated with rest, fluids, and antiviral medications if prescribed. Annual flu vaccine is recommended for prevention.',
+        'symptom': 'Medical symptoms require proper evaluation by healthcare professionals. Seek medical attention for persistent or severe symptoms.'
+    }
+    
+    for keyword, response in topic_responses.items():
+        if keyword in question_lower:
+            return response, []
+    
+    answer = ("Medical information varies by condition. Consult healthcare professionals and verified sources "
+              "such as WHO, CDC, or medical journals for evidence-based guidance on specific health topics.")
     return answer, []
 
 
 def evaluate_answer(pred, reference, retrieved):
-    """Evaluate answer on Factuality, Completeness, Faithfulness, Safety."""
     tokens_pred = set(pred.lower().split())
     tokens_ref = set(str(reference).lower().split())
     overlap = tokens_pred & tokens_ref
@@ -189,7 +220,7 @@ comparison_data = {
 comparison_df = pd.DataFrame(comparison_data)
 comparison_path = os.path.join(output_dir, 'rag_vs_nonrag_comparison.csv')
 comparison_df.to_csv(comparison_path, index=False)
-print(f"✓ Saved summary comparison to {comparison_path}")
+print(f"Saved summary comparison to {comparison_path}")
 
 # Save detailed results for each QA pair
 detailed_results = []
@@ -221,7 +252,7 @@ for idx, row in subset.iterrows():
 detailed_df = pd.DataFrame(detailed_results)
 detailed_path = os.path.join(output_dir, 'rag_vs_nonrag_detailed.csv')
 detailed_df.to_csv(detailed_path, index=False)
-print(f"✓ Saved detailed results for {len(detailed_df)} QA pairs to {detailed_path}")
+print(f"Saved detailed results for {len(detailed_df)} QA pairs to {detailed_path}")
 
 print("\n" + "=" * 60)
 print("Evaluation Complete!")

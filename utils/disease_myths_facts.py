@@ -1,13 +1,8 @@
-"""
-Functions for managing disease-specific myths and facts
-"""
-
 import pandas as pd
 import os
 from datetime import datetime
 
 def save_to_dataset(text: str, label: str, source: str, topic: str, disease: str = None):
-    """Save generated content to the dataset with proper tagging"""
     
     dataset_path = "data/processed/medical_dataset.csv"
     
@@ -50,35 +45,19 @@ def save_to_dataset(text: str, label: str, source: str, topic: str, disease: str
         return False
 
 def get_disease_myths_and_facts(disease_name: str, ai_available: bool = False, ai_provider: str = None):
-    """Get myths and facts for a specific disease.
-
-    This implementation:
-    - First checks if disease exists in dataset
-    - If not found, uses AI to find similar disease and adapts its myths/facts
-    - Prioritizes detailed statements with links
-    - Always returns 5 myths and 5 facts
-    """
-    
     # Try to get from unknown disease handler first if disease might not be in dataset
     from utils.disease_symptoms import get_symptoms
     from utils.unknown_disease_handler import get_unknown_disease_handler
-    
     # Check if disease has symptoms in our database
     existing_symptoms = get_symptoms(disease_name)
     is_in_database = existing_symptoms and str(existing_symptoms).strip() and not str(existing_symptoms).lower().startswith("symptoms not")
-    
-    # If not in database and AI is available, try unknown disease handler
     if not is_in_database and ai_available:
         try:
             handler = get_unknown_disease_handler()
-            
-            # Check if it's truly unknown
             if not handler.is_disease_known(disease_name):
                 print(f"Disease '{disease_name}' not in database, searching for similar disease...")
                 result = handler.handle_unknown_disease_query(disease_name, save_to_db=True)
-                
                 if not result.get('error') and result.get('similar_disease'):
-                    # Successfully found similar disease with adapted myths/facts
                     print(f"Found similar disease: {result['similar_disease']['disease_name']}")
                     return {
                         "myths": result.get('myths', [])[:5],
@@ -299,7 +278,6 @@ def get_disease_myths_and_facts(disease_name: str, ai_available: bool = False, a
 
 
 def generate_and_save_disease_content(disease_name: str, ai_available: bool = False, ai_provider: str = None):
-    """Generate and save 100 credible, 100 misinformation, and 100 fact statements for a new disease"""
     
     if not ai_available or not ai_provider:
         return False, "AI not available"
@@ -336,14 +314,6 @@ def generate_and_save_disease_content(disease_name: str, ai_available: bool = Fa
 
 
 def display_disease_myths_and_facts(disease_name: str, ai_available: bool = False, ai_provider: str = None, display_name: str = None):
-    """Display disease-specific myths and facts in Streamlit
-    
-    Args:
-        disease_name: Disease name to use for data lookup
-        ai_available: Whether AI is available
-        ai_provider: AI provider name
-        display_name: Optional display name (if different from disease_name)
-    """
     
     import streamlit as st
     

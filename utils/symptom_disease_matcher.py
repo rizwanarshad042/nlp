@@ -1,8 +1,3 @@
-"""
-Symptom-based Disease Detection System
-Detects diseases from symptom descriptions and provides medical context
-"""
-
 from __future__ import annotations
 
 import pandas as pd
@@ -16,7 +11,6 @@ from utils.disease_symptoms import get_symptoms, upsert_disease, CSV_PATH
 
 
 class SymptomDiseaseMatcher:
-    """Match user symptoms with known diseases and provide medical evidence"""
     
     def __init__(self, disease_csv_path: str = CSV_PATH):
         self.disease_csv_path = disease_csv_path
@@ -26,7 +20,6 @@ class SymptomDiseaseMatcher:
         self._load_disease_data()
     
     def _load_disease_data(self) -> None:
-        """Load disease symptoms data"""
         if os.path.exists(self.disease_csv_path):
             try:
                 self.disease_df = pd.read_csv(self.disease_csv_path)
@@ -44,7 +37,6 @@ class SymptomDiseaseMatcher:
                 self.disease_df = pd.DataFrame()
     
     def extract_symptoms_from_text(self, text: str) -> List[str]:
-        """Extract symptom keywords from user text"""
         symptom_keywords = [
             'fever', 'cough', 'pain', 'headache', 'nausea', 'vomiting', 'diarrhea',
             'fatigue', 'weakness', 'dizziness', 'shortness of breath', 'difficulty breathing',
@@ -86,17 +78,6 @@ class SymptomDiseaseMatcher:
         top_k: int = 5,
         min_similarity: float = 0.3
     ) -> List[Dict]:
-        """
-        Match user symptoms with diseases and return ranked results with evidence
-        
-        Args:
-            user_symptom_text: User's symptom description
-            top_k: Number of top matching diseases to return
-            min_similarity: Minimum similarity threshold
-            
-        Returns:
-            List of dicts with disease info, similarity, and evidence
-        """
         if self.disease_df is None or self.disease_df.empty:
             return []
         
@@ -145,12 +126,6 @@ class SymptomDiseaseMatcher:
         disease_name: str,
         dataset_path: str = "data/processed/medical_dataset.csv"
     ) -> Dict[str, List[str]]:
-        """
-        Get evidence (myths/facts) for a specific disease from dataset
-        
-        Returns:
-            Dict with 'myths' and 'facts' lists
-        """
         evidence = {'myths': [], 'facts': []}
         
         if not os.path.exists(dataset_path):
@@ -181,16 +156,6 @@ class SymptomDiseaseMatcher:
         user_text: str,
         top_k: int = 3
     ) -> Dict:
-        """
-        Complete diagnosis workflow: match symptoms and return evidence
-        
-        Returns:
-            Dict with:
-            - matched_diseases: List of matched diseases with scores
-            - user_symptoms: Extracted symptoms
-            - evidence: Myths and facts for top disease
-            - recommendation: Medical recommendation
-        """
         result = {
             'matched_diseases': [],
             'user_symptoms': [],

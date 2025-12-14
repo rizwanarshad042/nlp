@@ -12,14 +12,6 @@ from utils.labels import LABELS, normalize_label
 
 
 def extract_disease_name_from_statement(text: str) -> Optional[str]:
-    """Extract disease name from statements like 'X cures Y' or 'X treats Y'
-    
-    Returns the disease name (Y) from patterns like:
-    - "X cures Y"
-    - "X treats Y" 
-    - "X prevents Y"
-    - "X causes Y"
-    """
     import re
     
     text_lower = text.lower()
@@ -63,11 +55,6 @@ def extract_disease_name_from_statement(text: str) -> Optional[str]:
 
 
 def extract_disease_from_text(text: str) -> List[str]:
-    """Extract potential disease names from medical text.
-    
-    This is a simple implementation - in production you'd want to use
-    NER models like spaCy's medical NER or BioBERT NER.
-    """
     # Disease mapping for better matching with database
     disease_mapping = {
         "covid-19": "COVID-19",
@@ -121,11 +108,6 @@ def extract_disease_from_text(text: str) -> List[str]:
 
 
 def handle_unknown_disease(disease_name: str, statement: str) -> Tuple[str, str]:
-    """Handle unknown disease by updating disease_symptoms.csv.
-    
-    Returns:
-        Tuple of (symptoms, explanation)
-    """
     try:
         symptoms = "symptoms not available"
         explanation = "explanation not available"
@@ -138,15 +120,6 @@ def handle_unknown_disease(disease_name: str, statement: str) -> Tuple[str, str]
 
 
 def find_similar_diseases(symptoms_text: str, top_k: int = 3) -> List[Tuple[str, float]]:
-    """Find similar diseases based on symptom text using TF-IDF cosine similarity.
-
-    Args:
-        symptoms_text: The symptom description for a (possibly new) disease
-        top_k: Number of most similar diseases to return
-
-    Returns:
-        List of tuples (disease_name, similarity_score) sorted by score desc
-    """
     try:
         csv_path = "disease_symptoms.csv"
         if not os.path.exists(csv_path):
@@ -181,16 +154,6 @@ def classify_with_disease_context(
     model_predictions: Dict[str, float],
     confidence_threshold: float = 0.7
 ) -> Dict[str, any]:
-    """Classify statement with disease context.
-    
-    Args:
-        statement: The medical statement to classify
-        model_predictions: Dict with model predictions {label: probability}
-        confidence_threshold: Threshold for model confidence
-    
-    Returns:
-        Dict with classification results and metadata
-    """
     # Extract diseases from statement
     diseases = extract_disease_from_text(statement)
     
@@ -246,15 +209,6 @@ def classify_with_disease_context(
 
 
 def get_top_myths_and_facts(dataset_path: str, top_k: int = 5) -> Dict[str, List[str]]:
-    """Extract top myths and facts from the dataset.
-    
-    Args:
-        dataset_path: Path to the dataset CSV
-        top_k: Number of top items to return
-    
-    Returns:
-        Dict with 'myths' and 'facts' lists
-    """
     if not os.path.exists(dataset_path):
         return {"myths": [], "facts": []}
     
@@ -285,17 +239,6 @@ def should_trigger_retraining(
     retraining_threshold: int = 100,
     retraining_interval_days: int = 7
 ) -> bool:
-    """Determine if model retraining should be triggered.
-    
-    Args:
-        new_entries_count: Number of new entries since last training
-        days_since_last_training: Days since last model training
-        retraining_threshold: Minimum entries to trigger retraining
-        retraining_interval_days: Maximum days between retraining
-    
-    Returns:
-        True if retraining should be triggered
-    """
     return (
         new_entries_count >= retraining_threshold or 
         days_since_last_training >= retraining_interval_days

@@ -1,11 +1,3 @@
-"""
-Unknown Disease Handler
-Handles queries about diseases not in the dataset by:
-1. Getting symptoms from AI for the unknown disease
-2. Finding the most similar disease from existing data
-3. Showing myths/facts with the original disease name replaced by the unknown disease name
-"""
-
 import pandas as pd
 import os
 import re
@@ -16,7 +8,6 @@ from utils.disease_symptoms import get_symptoms, upsert_disease, CSV_PATH
 
 
 class UnknownDiseaseHandler:
-    """Handle queries about diseases not in the dataset"""
     
     def __init__(self, dataset_path: str = "data/processed/medical_dataset.csv"):
         self.dataset_path = dataset_path
@@ -24,7 +15,6 @@ class UnknownDiseaseHandler:
         self.matcher = get_matcher()
     
     def is_disease_known(self, disease_name: str) -> bool:
-        """Check if disease exists in our database"""
         if not os.path.exists(self.disease_csv_path):
             return False
         
@@ -43,7 +33,6 @@ class UnknownDiseaseHandler:
             return False
     
     def get_ai_symptoms(self, disease_name: str) -> Optional[str]:
-        """Get symptoms for unknown disease from AI"""
         try:
             # Use Gemini to get symptoms
             symptoms = gemini_list_symptoms(disease_name)
@@ -62,12 +51,6 @@ class UnknownDiseaseHandler:
         symptoms: str,
         top_k: int = 1
     ) -> Optional[Dict]:
-        """
-        Find the most similar disease based on symptoms
-        
-        Returns:
-            Dict with similar disease info or None
-        """
         try:
             # Use the symptom matcher to find similar diseases
             matches = self.matcher.match_symptoms_to_diseases(
@@ -90,10 +73,6 @@ class UnknownDiseaseHandler:
         original_disease: str, 
         new_disease: str
     ) -> str:
-        """
-        Replace disease name in text while preserving context
-        Handles various forms of the disease name
-        """
         if not text or not original_disease:
             return text
         
@@ -138,12 +117,6 @@ class UnknownDiseaseHandler:
         max_myths: int = 10,
         max_facts: int = 10
     ) -> Dict[str, List[str]]:
-        """
-        Get myths and facts from similar disease with name replacement
-        
-        Returns:
-            Dict with 'myths' and 'facts' lists with replaced disease names
-        """
         result = {
             'myths': [],
             'facts': [],

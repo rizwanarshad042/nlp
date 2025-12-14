@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Advanced Data Augmentation for Medical Misinformation Detection
-Generates more training samples through various augmentation techniques
-"""
 
 import os
 import pandas as pd
@@ -75,7 +71,6 @@ class MedicalDataAugmenter:
         ]
         
     def load_comprehensive_data(self):
-        """Load the comprehensive dataset"""
         comprehensive_path = "data/processed/medical_dataset.csv"
         if os.path.exists(comprehensive_path):
             df = pd.read_csv(comprehensive_path)
@@ -86,7 +81,6 @@ class MedicalDataAugmenter:
             return None
     
     def synonym_replacement(self, text: str, num_replacements: int = 2) -> str:
-        """Replace medical terms with synonyms"""
         words = text.split()
         augmented_text = words.copy()
         
@@ -107,7 +101,6 @@ class MedicalDataAugmenter:
             for idx, synonyms in selected_terms:
                 original_word = words[idx]
                 synonym = random.choice(synonyms)
-                # Preserve capitalization and punctuation
                 if original_word.isupper():
                     synonym = synonym.upper()
                 elif original_word.istitle():
@@ -117,10 +110,8 @@ class MedicalDataAugmenter:
         return ' '.join(augmented_text)
     
     def back_translation_style(self, text: str) -> str:
-        """Create variations through paraphrasing techniques"""
         variations = []
         
-        # Simple paraphrasing patterns
         patterns = [
             (r'\bI\b', 'We'),
             (r'\bmy\b', 'our'),
@@ -134,45 +125,37 @@ class MedicalDataAugmenter:
         
         augmented_text = text
         for pattern, replacement in random.sample(patterns, min(3, len(patterns))):
-            if random.random() < 0.5:  # 50% chance to apply each pattern
+            if random.random() < 0.5:
                 augmented_text = re.sub(pattern, replacement, augmented_text, flags=re.IGNORECASE)
         
         return augmented_text
     
     def add_context_variations(self, text: str, label: str) -> str:
-        """Add contextual variations based on label"""
         if label == 'false':
-            # Add misinformation patterns
             pattern = random.choice(self.misinformation_patterns)
             return f"{pattern} {text.lower()}"
         elif label == 'credible':
-            # Add credible patterns
             pattern = random.choice(self.credible_patterns)
             return f"{pattern} {text.lower()}"
         else:
             return text
     
     def create_semantic_variations(self, text: str) -> List[str]:
-        """Create semantic variations of the text"""
         variations = []
         
-        # Original text
         variations.append(text)
         
         # Synonym replacement
         variations.append(self.synonym_replacement(text, num_replacements=2))
         variations.append(self.synonym_replacement(text, num_replacements=3))
         
-        # Back-translation style
         variations.append(self.back_translation_style(text))
         
-        # Remove duplicates
         variations = list(set(variations))
         
         return variations
     
     def augment_dataset(self, df: pd.DataFrame, augmentation_factor: int = 5) -> pd.DataFrame:
-        """Augment the entire dataset"""
         print(f"Starting data augmentation with factor {augmentation_factor}...")
         
         augmented_records = []
@@ -183,23 +166,17 @@ class MedicalDataAugmenter:
             source = row.get('source', 'augmented')
             topic = row.get('topic', 'general_health')
             
-            # Skip unknown labels
             if label == 'unknown':
                 continue
             
-            # Original record
             augmented_records.append(row.to_dict())
             
-            # Create variations
             variations = self.create_semantic_variations(text)
             
-            # Add context variations for each variation
             for i, variation in enumerate(variations):
-                if i < augmentation_factor - 1:  # -1 because we already have the original
-                    # Add context variation
+                if i < augmentation_factor - 1:
                     context_variation = self.add_context_variations(variation, label)
                     
-                    # Create augmented record
                     augmented_record = {
                         'text': context_variation,
                         'label': label,
@@ -221,10 +198,8 @@ class MedicalDataAugmenter:
         return augmented_df
     
     def create_synthetic_medical_data(self) -> pd.DataFrame:
-        """Create additional synthetic medical misinformation data"""
         synthetic_data = []
         
-        # Synthetic false medical claims
         false_claims = [
             "Drinking bleach cures COVID-19 infection completely",
             "Vaccines contain microchips for government tracking",
@@ -272,7 +247,6 @@ class MedicalDataAugmenter:
             "Medical ethics ensure patient safety and professional standards"
         ]
         
-        # Add false claims
         for i, claim in enumerate(false_claims):
             synthetic_data.append({
                 'text': claim,
@@ -288,7 +262,6 @@ class MedicalDataAugmenter:
                 'caps_ratio': sum(1 for c in claim if c.isupper()) / len(claim) if claim else 0
             })
         
-        # Add credible information
         for i, info in enumerate(credible_info):
             synthetic_data.append({
                 'text': info,
@@ -307,7 +280,6 @@ class MedicalDataAugmenter:
         return pd.DataFrame(synthetic_data)
     
     def _classify_topic(self, text: str) -> str:
-        """Classify text into health topics"""
         text_lower = text.lower()
         
         topic_keywords = {
@@ -330,7 +302,6 @@ class MedicalDataAugmenter:
         return 'general_health'
     
     def create_augmented_dataset(self) -> pd.DataFrame:
-        """Create an augmented training dataset with controlled augmentation"""
         print("Creating augmented dataset...")
         
         # Load original comprehensive data

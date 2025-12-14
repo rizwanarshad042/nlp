@@ -1,15 +1,3 @@
-"""
-Medical Content Filter - Enhanced Version
-Shared utility for filtering and validating medical-related content
-Used by data_downloader.py and process_and_label_data.py
-
-Features:
-- 355+ disease names from disease_symptoms.csv
-- Comprehensive medical terminology
-- Advanced filtering for non-medical content
-- News article detection
-- Medical content scoring
-"""
 
 import re
 import csv
@@ -18,7 +6,6 @@ from typing import List, Set, Dict, Tuple
 
 # Load disease names from disease_symptoms.csv
 def load_disease_names() -> List[str]:
-    """Load all disease names from disease_symptoms.csv"""
     disease_names = []
     csv_path = 'disease_symptoms.csv'
     
@@ -29,29 +16,25 @@ def load_disease_names() -> List[str]:
                 for row in reader:
                     disease_name = row.get('disease_name', '').strip()
                     if disease_name and disease_name != 'disease_name':
-                        # Add full name
                         disease_names.append(disease_name.lower())
                         
-                        # Add variations (remove parentheses content, abbreviations)
                         if '(' in disease_name:
                             base_name = disease_name.split('(')[0].strip().lower()
                             disease_names.append(base_name)
                             
-                            # Extract abbreviation
                             abbrev = disease_name[disease_name.find('(')+1:disease_name.find(')')].strip().lower()
                             if abbrev:
                                 disease_names.append(abbrev)
         except Exception as e:
             print(f"Warning: Could not load disease names: {e}")
     
-    return list(set(disease_names))  # Remove duplicates
+    return list(set(disease_names)) 
 
 # Load disease names
 DISEASE_NAMES = load_disease_names()
 
-# Comprehensive medical keywords
 MEDICAL_KEYWORDS = [
-    # Common diseases (in addition to loaded disease names)
+    # Common diseases 
     'covid', 'coronavirus', 'pandemic', 'sars-cov-2', 'influenza', 'flu', 'pneumonia',
     'tuberculosis', 'tb', 'diabetes', 'diabetic', 'cancer', 'tumor', 'tumour', 'oncology',
     'heart disease', 'cardiac', 'cardiovascular', 'hypertension', 'asthma', 'copd',
@@ -146,25 +129,21 @@ MEDICAL_KEYWORDS = [
     'gastrointestinal', 'endocrine', 'hematological', 'immunological',
 ]
 
-# Add disease names to medical keywords
 MEDICAL_KEYWORDS.extend(DISEASE_NAMES)
-MEDICAL_KEYWORDS = list(set(MEDICAL_KEYWORDS))  # Remove duplicates
+MEDICAL_KEYWORDS = list(set(MEDICAL_KEYWORDS))
 
-# News article indicators
 NEWS_INDICATORS = [
-    # News agency names
+
     'reuters', 'associated press', 'ap news', 'bloomberg', 'cnn', 'bbc', 'fox news',
     'the new york times', 'washington post', 'wall street journal', 'usa today',
     'the guardian', 'independent', 'telegraph', 'daily mail', 'times of',
     'npr', 'abc news', 'cbs news', 'nbc news', 'msnbc', 'cnbc',
-    
-    # News article patterns
+
     'according to sources', 'officials said', 'spokesperson', 'press release',
     'breaking news', 'news report', 'news article', 'reported by', 'by reporter',
     'correspondent', 'journalist', 'news agency', 'news outlet',
     'exclusive interview', 'press conference', 'statement released',
-    
-    # News structure patterns
+
     'washington (reuters)', 'london (reuters)', 'new york (reuters)',
     '(reuters)', '(ap)', '(bloomberg)', '(cnn)', '(bbc)',
     'told reporters', 'told reuters', 'told the associated press',
@@ -172,7 +151,6 @@ NEWS_INDICATORS = [
     'sources familiar with', 'people with knowledge of',
 ]
 
-# Non-medical keywords that indicate non-medical content
 NON_MEDICAL_KEYWORDS = [
     # Legal/crime
     'police', 'officer', 'arrest', 'lawsuit', 'settlement', 'court', 'judge',
@@ -222,7 +200,7 @@ NON_MEDICAL_KEYWORDS = [
     'weather', 'forecast', 'temperature', 'rain', 'snow', 'storm', 'hurricane',
 ]
 
-# Spam/promotional indicators
+
 SPAM_INDICATORS = [
     'click here', 'buy now', 'limited time offer', 'act now', 'order today',
     'free shipping', 'discount', 'sale', 'promo code', 'coupon',
@@ -233,19 +211,8 @@ SPAM_INDICATORS = [
 
 
 def is_medical_content(text: str, min_medical_keywords: int = 2, strict_mode: bool = False) -> bool:
-    """
-    Determine if text is medical-related by checking for medical keywords.
-    Filters out news articles, spam, and non-medical content.
-    
-    Args:
-        text: Text to check
-        min_medical_keywords: Minimum number of medical keywords required
-        strict_mode: If True, applies stricter filtering
-    
-    Returns:
-        True if text is medical-related, False otherwise
-    """
-    if not text or len(text.strip()) < 20:
+
+    if not text or len(text.strip()) < 10:
         return False
     
     text_lower = text.lower()
@@ -257,12 +224,10 @@ def is_medical_content(text: str, min_medical_keywords: int = 2, strict_mode: bo
     
     # Check for news article patterns
     news_indicator_count = sum(1 for indicator in NEWS_INDICATORS if indicator in text_lower)
-    
-    # If it looks like a news article, check if it's medical news
+
     if news_indicator_count >= 2:
         medical_count = sum(1 for keyword in MEDICAL_KEYWORDS if keyword in text_lower)
         
-        # News articles need more medical content
         threshold = 5 if strict_mode else 4
         if medical_count < threshold:
             return False
@@ -278,13 +243,11 @@ def is_medical_content(text: str, min_medical_keywords: int = 2, strict_mode: bo
         if medical_topic_count < 2:
             return False
     
-    # Count medical keywords
     medical_count = sum(1 for keyword in MEDICAL_KEYWORDS if keyword in text_lower)
     
-    # Check for non-medical keywords
     non_medical_count = sum(1 for keyword in NON_MEDICAL_KEYWORDS if keyword in text_lower)
     
-    # If text has many non-medical keywords and few medical keywords, reject
+
     if non_medical_count >= 3 and medical_count < 2:
         return False
     
@@ -300,7 +263,7 @@ def is_medical_content(text: str, min_medical_keywords: int = 2, strict_mode: bo
         if medical_count < threshold:
             return False
     
-    # Check if text is primarily about non-medical topics
+    # Check if text is about non-medical topics
     first_100_chars = text_lower[:100]
     if any(nm_keyword in first_100_chars for nm_keyword in ['police', 'lawsuit', 'settlement', 'attorney', 'court', 'arrest']):
         if medical_count < 3:
@@ -312,7 +275,6 @@ def is_medical_content(text: str, min_medical_keywords: int = 2, strict_mode: bo
         if medical_count < threshold:
             return False
     
-    # Require minimum medical keywords
     return medical_count >= min_medical_keywords
 
 
@@ -357,27 +319,18 @@ def is_spam_content(text: str) -> bool:
 
 
 def get_medical_content_score(text: str) -> float:
-    """
-    Calculate a medical content score (0.0 to 1.0)
-    
-    Returns:
-        Score from 0.0 (non-medical) to 1.0 (highly medical)
-    """
     if not text or len(text.strip()) < 20:
         return 0.0
     
     medical_count = get_medical_keyword_count(text)
     non_medical_count = get_non_medical_keyword_count(text)
     
-    # Calculate score based on keyword ratio
     total_keywords = medical_count + non_medical_count
     if total_keywords == 0:
         return 0.0
     
-    # Medical ratio
     medical_ratio = medical_count / total_keywords
     
-    # Bonus for high medical keyword count
     if medical_count >= 5:
         medical_ratio = min(1.0, medical_ratio + 0.2)
     
@@ -398,32 +351,22 @@ def filter_medical_texts(texts: List[str], min_keywords: int = 2, strict_mode: b
 
 
 def get_medical_keywords() -> List[str]:
-    """Get the list of medical keywords"""
     return MEDICAL_KEYWORDS.copy()
 
 
 def get_disease_names() -> List[str]:
-    """Get the list of disease names"""
     return DISEASE_NAMES.copy()
 
 
 def get_non_medical_keywords() -> List[str]:
-    """Get the list of non-medical keywords"""
     return NON_MEDICAL_KEYWORDS.copy()
 
 
 def get_news_indicators() -> List[str]:
-    """Get the list of news indicators"""
     return NEWS_INDICATORS.copy()
 
-
+# summary
 def analyze_text_medical_content(text: str) -> Dict:
-    """
-    Analyze text and return detailed medical content statistics
-    
-    Returns:
-        Dictionary with analysis results
-    """
     return {
         'is_medical': is_medical_content(text),
         'medical_keyword_count': get_medical_keyword_count(text),
@@ -447,7 +390,7 @@ def get_statistics() -> Dict:
     }
 
 
-# Print statistics when module is loaded
+
 if __name__ == '__main__':
     stats = get_statistics()
     print("="*60)

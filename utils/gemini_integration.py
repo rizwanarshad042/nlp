@@ -1,15 +1,9 @@
-"""
-Groq API Integration for Medical Misinformation Detection System
-Provides free AI explanations using Groq API (replaces Gemini)
-"""
-
 import os
 import requests
 import json
 from typing import Optional
 
 def get_gemini_client():
-    """Get Groq API client (kept name for compatibility)"""
     try:
         from api_keys import GROQ_API_KEY
         api_key = GROQ_API_KEY
@@ -28,15 +22,6 @@ def get_gemini_client():
     return api_key
 
 def gemini_classify_statement(statement: str) -> str:
-    """
-    Get AI classification of a medical statement
-    
-    Args:
-        statement: The medical statement to classify
-    
-    Returns:
-        The AI's classification label: "credible", "misleading", or "false"
-    """
     try:
         api_key = get_gemini_client()
         
@@ -92,17 +77,6 @@ def gemini_classify_statement(statement: str) -> str:
         return None
 
 def gemini_explain_classification(statement: str, predicted_label: str, confidence: float) -> str:
-    """
-    Generate explanation using Groq API (kept name for compatibility)
-    
-    Args:
-        statement: The medical statement being classified
-        predicted_label: The predicted label (credible, misleading, or false)
-        confidence: The confidence score of the prediction
-    
-    Returns:
-        A detailed explanation of why the statement was classified as such
-    """
     try:
         api_key = get_gemini_client()
         
@@ -174,15 +148,6 @@ def gemini_explain_classification(statement: str, predicted_label: str, confiden
         return f"Error generating explanation: {str(e)}"
 
 def gemini_list_symptoms(disease_name: str) -> str:
-    """
-    Generate symptoms list using Groq API (kept name for compatibility)
-    
-    Args:
-        disease_name: The name of the disease
-    
-    Returns:
-        A comma-separated list of symptoms
-    """
     try:
         api_key = get_gemini_client()
         
@@ -230,7 +195,6 @@ def gemini_list_symptoms(disease_name: str) -> str:
         return "symptoms not available"
 
 def check_gemini_api_key():
-    """Check if Groq API key is available and valid (kept name for compatibility)"""
     try:
         from api_keys import GROQ_API_KEY
         api_key = GROQ_API_KEY

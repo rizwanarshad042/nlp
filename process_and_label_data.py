@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Data Processing and Labeling Script
-Processes downloaded datasets and assigns labels based on source credibility
-"""
 
 import os
 import sys
@@ -16,10 +12,8 @@ import re
 import random
 from collections import Counter, defaultdict
 
-# Add utils to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 # Import shared medical content filter
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils.medical_content_filter import (
     is_medical_content,
     get_medical_keyword_count,
@@ -31,11 +25,9 @@ DATA_DIR = 'general_medical_misinformation_data'
 RAW_DATA_INPUT = 'data/processed/raw_downloaded_data.csv'
 OUTPUT_PATH = 'data/processed/medical_dataset.csv'
 os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
-MYTHS_OUTPUT = 'data/processed/top_myths.csv'
-FACTS_OUTPUT = 'data/processed/top_facts.csv'
 QA_OUTPUT = 'data/processed/qa_pairs_100.csv'
 MAX_DATASET_SIZE = 52000
-LABEL_TARGETS = {
+LABEL_TARGETS = {  
     'credible': 32000,
     'false': 12000,
     'misleading': 8000
@@ -59,9 +51,9 @@ CLAIM_KEYWORDS = [
     'immune', 'dosage', 'variant', 'virus', 'bacteria', 'antibiotic'
 ]
 
-# Source-based labeling rules - All sources are medical-related
+# Source-based labeling - All sources are medical-related
 SOURCE_LABEL_MAP = {
-    # Credible sources - Official Health Organizations
+
     'who_mythbusters': 'credible',
     'who_general_facts': 'credible',
     'who_covid_myths': 'credible',
@@ -77,11 +69,10 @@ SOURCE_LABEL_MAP = {
     'factcheck_health': 'credible',
     'snopes_health': 'credible',
     
-    # Credible sources - Research and Datasets
     'biosentvec': 'credible',
     'biowordvec': 'credible',
     'covid_chestxray': 'credible',
-    'kaggle_amazon_reviews': 'credible',  # Medical product reviews
+    'kaggle_amazon_reviews': 'credible', 
     'kaggle_sqlite': 'credible',
     'kaggle_real_news': 'credible',
     'kaggle_news_dataset': 'credible',
@@ -91,10 +82,9 @@ SOURCE_LABEL_MAP = {
     'manual_labeling': 'credible',
     'clinician_review': 'credible',
     
-    # Misleading/False sources - Misinformation Datasets
     'kaggle_fake_true_news': 'false',
     'monant_misinfo': 'false',
-    'healthfact_dataset': 'false',  # Contains false claims for fact-checking
+    'healthfact_dataset': 'false', 
     'facebook_health_misinfo': 'false',
     'healthlies': 'misleading',
     'med_mmhl': 'misleading',
@@ -105,19 +95,13 @@ SOURCE_LABEL_MAP = {
     'medical_fact_checking': 'credible',
     'covid_misinfo_claims': 'misleading',
     
-    # AI generated
-    'ai_generated': 'credible',  # Default, can be overridden
-    'user_input': None,  # Requires manual review
+    'ai_generated': 'credible',  
+    'user_input': None, 
     'user_augmented': None,
     'ai_feedback': None,
-    'template_generated': 'misleading',  # Template myths
+    'template_generated': 'misleading', 
     
-    # Default fallback
-    'unknown': 'credible',  # Default to credible if source unknown
 }
-
-# Medical content filtering is now handled by utils/medical_content_filter.py
-# This ensures consistency across all scripts
 
 # Topic classification keywords
 TOPIC_KEYWORDS = {
@@ -128,12 +112,34 @@ TOPIC_KEYWORDS = {
     'diabetes': ['diabetes', 'diabetic', 'blood sugar', 'glucose'],
     'heart_disease': ['heart', 'cardiac', 'cardiovascular', 'hypertension'],
     'nutrition': ['diet', 'nutrition', 'food', 'vitamin'],
-    'general_health': []  # Default
+    'general_health': []
 }
 
+
+DISEASE_NAMES = []
+try:
+    disease_df = pd.read_csv('disease_symptoms.csv')
+    DISEASE_NAMES = disease_df['disease_name'].tolist()
+except Exception as e:
+    print(f"Warning: Could not load disease_symptoms.csv: {e}")
+
 def classify_topic(text: str) -> str:
-    """Classify text into health topics"""
+    if not isinstance(text, str):
+        return 'general_health'
+    
     text_lower = text.lower()
+    
+    # check if text contains any disease name from disease_symptoms.csv
+    for disease_name in DISEASE_NAMES:
+        if not disease_name:
+            continue
+        disease_lower = disease_name.lower()
+        if disease_lower in text_lower:
+            return disease_name
+        disease_parts = disease_lower.split()
+        if any(part in text_lower and len(part) > 3 for part in disease_parts):
+            return disease_name
+    
     for topic, keywords in TOPIC_KEYWORDS.items():
         if topic == 'general_health':
             continue
@@ -142,38 +148,39 @@ def classify_topic(text: str) -> str:
     return 'general_health'
 
 def extract_disease_from_text(text: str) -> str:
-    """Extract disease name from text"""
-    disease_mapping = {
-        "covid-19": "COVID-19", "covid": "COVID-19", "coronavirus": "COVID-19",
-        "influenza": "Influenza (Flu)", "flu": "Influenza (Flu)",
-        "diabetes": "Diabetes Type 2", "cancer": "Cancer",
-        "heart disease": "Heart Disease", "hypertension": "Hypertension",
-        "asthma": "Asthma", "copd": "COPD", "stroke": "Stroke",
-        "alzheimer": "Alzheimer's Disease", "parkinson": "Parkinson's Disease"
-    }
+    """Extract disease name from text using disease_symptoms.csv"""
+    if not isinstance(text, str):
+        return None
     
     text_lower = text.lower()
-    for keyword, disease in disease_mapping.items():
-        if keyword in text_lower:
-            return disease
+    
+    # Check if text contains any disease name from disease_symptoms.csv
+    for disease_name in DISEASE_NAMES:
+        if not disease_name:
+            continue
+        disease_lower = disease_name.lower()
+        if disease_lower in text_lower:
+            return disease_name
+        disease_parts = disease_lower.split()
+        if any(part in text_lower and len(part) > 3 for part in disease_parts):
+            return disease_name
+    
     return None
 
 def split_into_sentences(text: str) -> list:
-    """Lightweight sentence splitter for claim extraction."""
     if not isinstance(text, str):
         return []
     sentences = re.split(r'(?<=[.!?])\s+', text.replace('\n', ' '))
     return [sent.strip() for sent in sentences if sent.strip()]
 
 def is_claim_sentence(sentence: str) -> bool:
-    """Heuristic check to see if a sentence makes a medical claim."""
     if len(sentence) < 30:
         return False
     lower = sentence.lower()
     return any(keyword in lower for keyword in CLAIM_KEYWORDS)
 
+# Splits long articles into multiple rows.
 def expand_records_to_claims(records):
-    """Explode long texts into individual claim sentences."""
     expanded = []
     for rec in records:
         sentences = split_into_sentences(rec.get('text', ''))
@@ -201,8 +208,8 @@ def normalize_label_value(label_text: str, default_label='credible'):
         return 'misleading'
     return default_label
 
+# generate sentences for each disease in our dataset
 def generate_synthetic_claims(max_per_disease: int = 15):
-    """Generate synthetic claims from disease_symptoms.csv for data balancing."""
     synthetic_records = []
     csv_path = Path('disease_symptoms.csv')
     if not csv_path.exists():
@@ -211,7 +218,7 @@ def generate_synthetic_claims(max_per_disease: int = 15):
     try:
         df = pd.read_csv(csv_path)
     except Exception as exc:
-        print(f"   ⚠ Could not read {csv_path}: {exc}")
+        print(f"   Could not read {csv_path}: {exc}")
         return synthetic_records
     
     for _, row in df.iterrows():
@@ -266,11 +273,10 @@ def generate_synthetic_claims(max_per_disease: int = 15):
                 count += 1
                 if count >= max_per_disease // len(templates):
                     break
-    print(f"   ✓ Generated {len(synthetic_records)} synthetic statements from disease_symptoms.csv")
+    print(f"   Generated {len(synthetic_records)} synthetic statements from disease_symptoms.csv")
     return synthetic_records
 
 def apply_source_limits(df: pd.DataFrame) -> pd.DataFrame:
-    """Limit the maximum number of samples per source to avoid dominance."""
     frames = []
     for source, group in df.groupby('source'):
         limit = SOURCE_SAMPLE_LIMITS.get(source)
@@ -278,7 +284,7 @@ def apply_source_limits(df: pd.DataFrame) -> pd.DataFrame:
             group = group.sample(n=limit, random_state=42)
         frames.append(group)
     limited_df = pd.concat(frames, ignore_index=True)
-    print(f"   ✓ Applied per-source limits. Records after limiting: {len(limited_df)}")
+    print(f"   Applied per-source limits. Records after limiting: {len(limited_df)}")
     return limited_df
 
 def rebalance_labels(df: pd.DataFrame) -> pd.DataFrame:
@@ -287,7 +293,7 @@ def rebalance_labels(df: pd.DataFrame) -> pd.DataFrame:
     for label, target in LABEL_TARGETS.items():
         label_df = df[df['label'] == label]
         if label_df.empty:
-            print(f"   ⚠ No samples found for label '{label}'. Skipping target balancing for it.")
+            print(f"   No samples found for label '{label}'. Skipping target balancing for it.")
             continue
         if len(label_df) > target:
             label_df = label_df.sample(n=target, random_state=42)
@@ -301,7 +307,7 @@ def rebalance_labels(df: pd.DataFrame) -> pd.DataFrame:
         balanced_df = balanced_df.sample(n=MAX_DATASET_SIZE, random_state=42).reset_index(drop=True)
     else:
         balanced_df = balanced_df.sample(frac=1, random_state=42).reset_index(drop=True)
-    print(f"   ✓ Rebalanced labels to targets (<= {MAX_DATASET_SIZE} samples).")
+    print(f"   Rebalanced labels to targets (<= {MAX_DATASET_SIZE} samples).")
     return balanced_df
 
 def print_label_summary(df: pd.DataFrame, heading: str):
@@ -312,7 +318,6 @@ def print_label_summary(df: pd.DataFrame, heading: str):
     print("="*60)
 
 def process_kaggle_datasets():
-    """Process Kaggle datasets"""
     records = []
     kaggle_files = glob.glob(os.path.join(DATA_DIR, '**/*.csv'), recursive=True)
     
@@ -335,7 +340,6 @@ def process_kaggle_datasets():
             
             df = pd.read_csv(file_path, on_bad_lines='skip', low_memory=False)
             
-            # Handle different column names
             text_col = None
             label_col = None
             
@@ -373,7 +377,7 @@ def process_kaggle_datasets():
                         label = 'credible'
                     
                     records.append({
-                        'text': text[:10000],  # Limit length
+                        'text': text[:10000], 
                         'label': label,
                         'source': source,
                         'topic': classify_topic(text),
@@ -387,10 +391,8 @@ def process_kaggle_datasets():
     return expand_records_to_claims(records)
 
 def process_who_cdc_scraped_data():
-    """Process scraped WHO/CDC/NIH/NHS and fact-checking data"""
     records = []
     
-    # Map of files to their source identifiers
     scraped_files = [
         ('who_general_facts.txt', 'who_general_facts'),
         ('who_covid_myths.txt', 'who_covid_myths'),
@@ -414,7 +416,7 @@ def process_who_cdc_scraped_data():
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
             
-            # Skip metadata lines (SOURCE: and URL:)
+            # Skip SOURCE and URL
             lines = content.split('\n')
             content_lines = [line for line in lines if not line.startswith('SOURCE:') and not line.startswith('URL:')]
             content = '\n'.join(content_lines)
@@ -427,18 +429,17 @@ def process_who_cdc_scraped_data():
                 if len(text) < 50:
                     continue
                 
-                # Filter non-medical content - all scraped data must be medical
+                # Filter non-medical content
                 if not is_medical_content(text):
                     continue
                 
-                # Split into sentences/paragraphs
+                # Split into sentences
                 sentences = re.split(r'[.!?]\s+', text)
                 for sentence in sentences:
                     sentence = sentence.strip()
                     if len(sentence) < 30:
                         continue
                     
-                    # Double-check medical content for individual sentences
                     if not is_medical_content(sentence, min_medical_keywords=1):
                         continue
                     
@@ -457,10 +458,8 @@ def process_who_cdc_scraped_data():
     return expand_records_to_claims(records)
 
 def process_github_datasets():
-    """Process datasets downloaded from GitHub"""
     records = []
     
-    # Look for extracted datasets
     dataset_dirs = [
         os.path.join(DATA_DIR, 'medical-misinformation-dataset-main'),
         os.path.join(DATA_DIR, 'Med-MMHL-main'),
@@ -485,7 +484,7 @@ def process_github_datasets():
             default_label = 'misleading'
         elif 'healthfact' in dir_lower or 'health-fact' in dir_lower:
             source = 'healthfact_dataset'
-            default_label = 'false'  # Contains false claims for fact-checking
+            default_label = 'false' 
         elif 'facebook' in dir_lower and 'health' in dir_lower:
             source = 'facebook_health_misinfo'
             default_label = 'false'
@@ -514,7 +513,6 @@ def process_github_datasets():
             source = 'github_unknown'
             default_label = 'credible'
         
-        # Find CSV/JSON files
         csv_files = glob.glob(os.path.join(dataset_dir, '**/*.csv'), recursive=True)
         json_files = glob.glob(os.path.join(dataset_dir, '**/*.json'), recursive=True)
         
@@ -604,7 +602,7 @@ def process_jsonl_datasets():
     records = []
     jsonl_files = glob.glob(os.path.join(DATA_DIR, '*.jsonl'))
     if not jsonl_files:
-    return records
+        return records
     
     file_source_map = {
         'scifact_train.jsonl': ('scifact', 'credible'),
@@ -654,11 +652,10 @@ def process_jsonl_datasets():
     return expand_records_to_claims(records)
 
 def process_raw_csv_data():
-    """Process raw downloaded CSV data and assign labels"""
     records = []
     
     if not os.path.exists(RAW_DATA_INPUT):
-        print(f"   ⚠ Raw data file not found: {RAW_DATA_INPUT}")
+        print(f"   Raw data file not found: {RAW_DATA_INPUT}")
         print(f"   Run data_downloader.py first to download and save raw data")
         return records
     
@@ -671,15 +668,14 @@ def process_raw_csv_data():
             source_file = str(row.get('source_file', 'unknown')).lower()
             source_type = str(row.get('source_type', 'unknown'))
             
-            # Determine source and label based on source_file name
             source = 'unknown'
-            label = 'credible'  # Default
+            label = 'credible' 
             
             # Map source file to source identifier and label
             if 'who' in source_file:
                 if 'myth' in source_file:
                     source = 'who_covid_myths'
-                    label = 'credible'  # WHO debunking myths
+                    label = 'credible' 
                 elif 'fact' in source_file:
                     source = 'who_general_facts'
                     label = 'credible'
@@ -777,7 +773,7 @@ def process_raw_csv_data():
                 label = 'misleading'
             
             else:
-                # Try to infer from text content
+                
                 text_lower = text.lower()
                 if any(word in text_lower for word in ['myth', 'false claim', 'misinformation', 'debunk']):
                     label = 'misleading'
@@ -798,10 +794,10 @@ def process_raw_csv_data():
                 'timestamp': datetime.now().isoformat()
             })
         
-        print(f"   ✓ Labeled {len(records)} records from raw CSV")
+        print(f"   Labeled {len(records)} records from raw CSV")
         
     except Exception as e:
-        print(f"   ✗ Error processing raw CSV: {e}")
+        print(f"   Error processing raw CSV: {e}")
     
     return records
 
@@ -813,17 +809,14 @@ def integrate_all_data():
     
     all_records = []
     
-    # First, try to process raw CSV data (preferred method)
     print("\n1. Processing raw downloaded CSV data...")
     raw_csv_records = process_raw_csv_data()
     if raw_csv_records:
         print(f"   Found {len(raw_csv_records)} records from raw CSV")
         all_records.extend(raw_csv_records)
     else:
-        # Fallback to processing individual sources
         print("\n   No raw CSV found. Processing individual data sources...")
         
-        # Process different data sources
         print("\n1a. Processing Kaggle datasets...")
         kaggle_records = process_kaggle_datasets()
         print(f"   Found {len(kaggle_records)} records from Kaggle")
@@ -862,20 +855,16 @@ def integrate_all_data():
     
     if not new_df.empty:
         print(f"\nTotal collected statements before limiting: {len(new_df)}")
-        # Remove duplicates based on text
         new_df = new_df.drop_duplicates(subset=['text'], keep='first')
         print(f"\n3. After deduplication: {len(new_df)} unique records")
         
-        # Apply per-source limits
         new_df = apply_source_limits(new_df)
         
-        # Rebalance labels
         new_df = rebalance_labels(new_df)
         print_label_summary(new_df, "POST-BALANCING LABEL COUNTS")
         
-        # Combine with existing
         if not existing_df.empty:
-            # Only add new records that don't exist
+            
             existing_texts = set(existing_df['text'].astype(str).str.lower())
             new_df = new_df[~new_df['text'].str.lower().isin(existing_texts)]
             print(f"4. After removing duplicates with existing: {len(new_df)} new records")
@@ -891,7 +880,7 @@ def integrate_all_data():
         
         # Save to medical_dataset.csv (labeled data)
         combined_df.to_csv(OUTPUT_PATH, index=False, quoting=1, escapechar='\\')
-        print(f"\n✓ Saved {len(combined_df)} total labeled records to {OUTPUT_PATH}")
+        print(f"\nSaved {len(combined_df)} total labeled records to {OUTPUT_PATH}")
         
         # Print statistics
         print("\n" + "="*60)
@@ -910,10 +899,10 @@ def integrate_all_data():
         print("="*60)
         print(f"\nRaw data was read from: {RAW_DATA_INPUT}")
         print(f"Labeled data saved to: {OUTPUT_PATH}")
-        print("\n✓ All data has been labeled and is ready for model training")
+        print("\nAll data has been labeled and is ready for model training")
         print("="*60)
     else:
-        print("\n⚠ No new records found. Dataset may already be processed or data directory is empty.")
+        print("\nNo new records found. Dataset may already be processed or data directory is empty.")
         if not existing_df.empty:
             print(f"Using existing dataset with {len(existing_df)} records")
 
