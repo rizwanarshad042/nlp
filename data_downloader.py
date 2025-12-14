@@ -238,7 +238,7 @@ def save_raw_data_to_csv():
                 if file.endswith('.csv'):
                     file_path = os.path.join(root, file)
                     try:
-                        df = pd.read_csv(file_path, on_bad_lines='skip', low_memory=False)
+                        df = pd.read_csv(file_path, on_bad_lines='skip', low_memory=False, encoding='utf-8')
                         
                         # Find text columns
                         text_cols = []
@@ -265,6 +265,13 @@ def save_raw_data_to_csv():
                                             'source_type': 'csv',
                                             'label': None  
                                         })
+                    except UnicodeDecodeError:
+                        # Try with different encoding
+                        try:
+                            df = pd.read_csv(file_path, on_bad_lines='skip', low_memory=False, encoding='latin-1')
+                            print(f"      Read {file} with latin-1 encoding")
+                        except Exception as e:
+                            print(f"      Error reading CSV {file}: {e}")
                     except Exception as e:
                         print(f"      Error reading CSV {file}: {e}")
         
