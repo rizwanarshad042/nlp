@@ -108,7 +108,7 @@ def filter_kaggle_dataset(slug):
                             
                             medical_percentage = (medical_rows / total_rows) * 100
                             
-                            if medical_percentage < 30:  # Less than 30% medical content
+                            if medical_percentage < 25:  # Less than 25% medical content
                                 print(f"      Removing non-medical dataset: {file} ({medical_percentage:.0f}% medical)")
                                 os.remove(file_path)
                             else:
