@@ -224,73 +224,66 @@ def calculate_metrics(y_true, y_pred, y_proba=None, labels=['credible', 'mislead
     
     return metrics
 
-# Train traditional machine learning models (Logistic Regression and Random Forest)
+# Train Logistic Regression and Random Forest
 def train_ml_models(X_train, X_test, y_train, y_test, label_encoder):
-    """Trains ML models using TF-IDF features"""
+    #x for training, y for evaluation
     results = {}
-    # Get label names (credible, false, misleading)
-    label_names = label_encoder.classes_.tolist()
-    # Convert numeric labels back to text for evaluation
-    y_test_labels = label_encoder.inverse_transform(y_test)
+    label_names = label_encoder.classes_.tolist() 
+    y_test_labels = label_encoder.inverse_transform(y_test) # num to label
     
-    # Convert text to TF-IDF features (word importance scores)
     print("\n" + "="*60)
     print("Training ML Models")
     print("="*60)
     
-    # TF-IDF converts text into numbers based on word frequency and importance
+    # TF-IDF vector embeddings
     vectorizer = TfidfVectorizer(
         max_features=5000,  # Keep top 5000 most important words
-        ngram_range=(1, 2),  # Use single words and word pairs
-        min_df=2,  # Word must appear at least 2 times
-        max_df=0.95  # Ignore words that appear in >95% of documents
+        ngram_range=(1, 2),  
+        min_df=2,  # min 2 time word appear
+        max_df=0.95  # common words filter 95% document
     )
     
-    # Transform training and test data to TF-IDF features
-    X_train_tfidf = vectorizer.fit_transform(X_train)  # Learn vocabulary from training
-    X_test_tfidf = vectorizer.transform(X_test)  # Apply same vocabulary to test
+    X_train_tfidf = vectorizer.fit_transform(X_train)  # important words
+    X_test_tfidf = vectorizer.transform(X_test)  # words to vectors
     
-    # Model 1: Logistic Regression (simple, fast, interpretable)
+
     print("\n1. Training Logistic Regression...")
     lr_model = LogisticRegression(
-        max_iter=1000,  # Maximum training iterations
-        random_state=42,  # For reproducibility
-        class_weight='balanced',  # Handle class imbalance
-        C=0.5,  # Stronger L2 regularization (lower C = more regularization)
-        penalty='l2'  # L2 regularization to prevent overfitting
+        max_iter=1000,  # Max training iterations
+        random_state=42,  
+        class_weight='balanced', # dataset balancing
+        C=0.5,  # creativity / learning rate
+        penalty='l2'  # prevent overfitting / penalty for large weights
     )
-    # Train the model
+    # Train
     lr_model.fit(X_train_tfidf, y_train)
     
-    # Make predictions on test set
+    # Predict on test set
     y_pred_lr = lr_model.predict(X_test_tfidf)
-    y_proba_lr = lr_model.predict_proba(X_test_tfidf)  # Confidence scores
-    y_pred_lr_labels = label_encoder.inverse_transform(y_pred_lr)  # Convert back to text
+    y_proba_lr = lr_model.predict_proba(X_test_tfidf) 
+    y_pred_lr_labels = label_encoder.inverse_transform(y_pred_lr)
     
-    # Calculate all metrics
     metrics_lr = calculate_metrics(y_test_labels, y_pred_lr_labels, y_proba_lr, labels=label_names)
-    # Save model and results
+    # Save
     results['logistic_regression'] = {
         'model': lr_model,
         'vectorizer': vectorizer,
         'metrics': metrics_lr
     }
     
-    # Print results
     print(f"   Accuracy: {metrics_lr['accuracy']:.4f}")
     print(f"   F1-Macro: {metrics_lr['f1_macro']:.4f}")
     
-    # Model 2: Random Forest
     print("\n2. Training Random Forest...")
     rf_model = RandomForestClassifier(
-        n_estimators=100,  # Reduced from 200 to prevent overfitting
-        max_depth=20,  # Reduced from 50 to limit tree complexity
-        min_samples_split=10,  # Require more samples to split
-        min_samples_leaf=5,  # Require more samples in leaf nodes
-        max_features='sqrt',  # Use subset of features
+        n_estimators=100,  # no. of trees
+        max_depth=20,  
+        min_samples_split=10,  # Require samples to split tree
+        min_samples_leaf=5,  # Require samples in leaf nodes decisions
+        max_features='sqrt',  # Use subset of features from tf idf
         random_state=42,
         class_weight='balanced',
-        n_jobs=-1
+        n_jobs=-1  # max cpu
     )
     rf_model.fit(X_train_tfidf, y_train)
     
