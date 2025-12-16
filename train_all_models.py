@@ -28,14 +28,12 @@ from transformers import (
     TrainingArguments, Trainer, EarlyStoppingCallback
 )
 
-# Fix random seeds so that if we rerun this script, we get (roughly) the same results.
-# 42 is just a common "magic" number people like to use.
 np.random.seed(42)
 torch.manual_seed(42)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(42)
 
-# Small Dataset wrapper that turns raw text into exactly what BioBERT expects.
+# Turns raw text into exactly what BioBERT expects.
 class TextDataset(Dataset):
     """Turn each text example into token IDs + attention mask + label for BioBERT."""
     def __init__(self, texts, labels, tokenizer, max_length=512):
@@ -47,12 +45,12 @@ class TextDataset(Dataset):
     def __len__(self):
         return len(self.texts)
     
+    # one text sample
     def __getitem__(self, idx):
-        # Pick out one text sample and its label
         text = str(self.texts[idx])
         label = self.labels[idx]
         
-        # Ask the tokenizer to turn raw text into token IDs and an attention mask
+        # Turn raw text into token IDs and an attention mask
         encoding = self.tokenizer(
             text,
             truncation=True,  # Cut off if too long
@@ -61,102 +59,96 @@ class TextDataset(Dataset):
             return_tensors='pt'  # Return as PyTorch tensor
         )
         
-        # Return everything BioBERT needs for this one example
         return {
-            'input_ids': encoding['input_ids'].flatten(),  # The actual tokens
+            'input_ids': encoding['input_ids'].flatten(),  # tokens
             'attention_mask': encoding['attention_mask'].flatten(),  # Which tokens to pay attention to
             'labels': torch.tensor(label, dtype=torch.long)  # The correct answer
         }
 
-# Simple 1D CNN model for text classification.
-# Think of this as sliding small windows over the sentence to find useful phrases.
 class CNNClassifier(nn.Module):
     """CNN text classifier that looks for short local patterns with different kernel sizes."""
     def __init__(self, vocab_size, embedding_dim=128, num_filters=100, filter_sizes=[3, 4, 5], num_classes=3, dropout=0.6):
         super(CNNClassifier, self).__init__()
-        # Convert word IDs to dense embedding vectors
+        # word IDs to dense embedding vectors
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        # Convolution filters with different window sizes (3, 4, 5 words, etc.)
+        # filters
         self.convs = nn.ModuleList([
             nn.Conv1d(embedding_dim, num_filters, kernel_size=fs)
             for fs in filter_sizes
         ])
-        # Dropout helps the model avoid overfitting
+        # Randomly drop 60% of neurons (prevent overfitting)
         self.dropout = nn.Dropout(dropout)
         # Final layer turns features into 3 class scores (credible, misleading, false)
         self.fc = nn.Linear(len(filter_sizes) * num_filters, num_classes)
     
     def forward(self, x):
-        # Step 1: turn word IDs into embeddings
+        # turn word IDs into embeddings
         x = self.embedding(x)
-        x = x.permute(0, 2, 1)  # rearrange for Conv1d: (batch, channels, seq_len)
+        # before tensor is (batch, seq_len, embedding dimensions)
+        x = x.permute(0, 2, 1)  # rearrange to (batch, embedding dimensions, seq_len)
         
-        # Step 2: apply each filter and keep only the strongest response
+        # apply filter
         conv_outputs = []
         for conv in self.convs:
             conv_out = torch.relu(conv(x))
-            pooled = torch.max_pool1d(conv_out, kernel_size=conv_out.size(2))  # global max‑pool
-            conv_outputs.append(pooled.squeeze(2))
+            # keep only the maximum value across entire sequence
+            pooled = torch.max_pool1d(conv_out, kernel_size=conv_out.size(2))
+            conv_outputs.append(pooled.squeeze(2)) # remove extra dimension
         
-        # Step 3: Combine all filter outputs
+        # Combine all filter results
         x = torch.cat(conv_outputs, dim=1)
         x = self.dropout(x)
-        x = self.fc(x)  # final class scores
+        x = self.fc(x)
         return x
 
-# Bidirectional LSTM model.
-# This one reads the sentence forwards and backwards so it can use context from both sides.
+
 class LSTMClassifier(nn.Module):
-    """Bi‑LSTM text classifier that understands word order and longer‑range context."""
     def __init__(self, vocab_size, embedding_dim=128, hidden_dim=256, num_layers=2, num_classes=3, dropout=0.6):
         super(LSTMClassifier, self).__init__()
         # Word ID → embedding vector
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        # LSTM reads text in both directions (forward and backward)
+        
         self.lstm = nn.LSTM(
             embedding_dim, hidden_dim, num_layers,
             batch_first=True, dropout=dropout if num_layers > 1 else 0,
-            bidirectional=True  # read text both ways for better context
+            bidirectional=True
         )
         # Dropout between LSTM and output layer
         self.dropout = nn.Dropout(dropout)
-        # Final classifier; x2 because forward + backward states are concatenated
+        # Final layer: 512 dimension → 3 classes
         self.fc = nn.Linear(hidden_dim * 2, num_classes)
     
     def forward(self, x):
         # Turn IDs into embeddings
         x = self.embedding(x)
-        # Run the LSTM over the whole sequence
+        # Run the LSTM
         lstm_out, (hidden, _) = self.lstm(x)
         # Combine the last forward and backward hidden states
         hidden = torch.cat((hidden[-2], hidden[-1]), dim=1)
-        # A bit of dropout for regularization
+
         x = self.dropout(hidden)
-        # Map to 3 output classes
+        # Convert to 3 class scores
         x = self.fc(x)
         return x
 
-# Load the medical dataset and do a bit of cleaning so bad rows don't confuse the models.
+# Load the medical dataset and do a bit of cleaning
 def load_and_prepare_data():
-    """Load medical_dataset.csv and drop rows with missing labels or tiny texts."""
     print("Loading dataset...")
     df = pd.read_csv("data/processed/medical_dataset.csv")
     
-    # Drop any rows that don't have a label – we can't train without a target
+    # Drop unlabel rows
     df = df[df['label'].notna()]
-    # Keep only the three labels we actually use in this project
+    # Keep only three labels
     df = df[df['label'].isin(['credible', 'misleading', 'false'])]
     
-    # Throw away extremely short strings (usually noise or formatting artefacts)
+    # remove short sentences
     df = df[df['text'].str.len() > 10]
     
-    # Give a quick overview of how much data we have left
     print(f"Total samples: {len(df)}")
     print(f"Label distribution:\n{df['label'].value_counts()}")
     
     return df
 
-# Central place where we compute all metrics so that every model is evaluated consistently.
 def calculate_metrics(y_true, y_pred, y_proba=None, labels=['credible', 'misleading', 'false']):
     """Compute accuracy, precision, recall, F1, AUC, exact match, top‑k and confusion matrix."""
     metrics = {}
@@ -168,12 +160,11 @@ def calculate_metrics(y_true, y_pred, y_proba=None, labels=['credible', 'mislead
     precision, recall, f1, _ = precision_recall_fscore_support(
         y_true, y_pred, average=None, labels=labels, zero_division=0
     )
-    # Macro averages: treat each class equally, regardless of how many examples it has
+
     metrics['precision_macro'] = np.mean(precision)
     metrics['recall_macro'] = np.mean(recall)
     metrics['f1_macro'] = np.mean(f1)
     
-    # Weighted averages: give more weight to classes that appear more often
     precision_w, recall_w, f1_w, _ = precision_recall_fscore_support(
         y_true, y_pred, average='weighted', labels=labels, zero_division=0
     )
@@ -181,7 +172,7 @@ def calculate_metrics(y_true, y_pred, y_proba=None, labels=['credible', 'mislead
     metrics['recall_weighted'] = recall_w
     metrics['f1_weighted'] = f1_w
     
-    # Store metrics per class – useful for tables and more detailed analysis
+    # Store metrics per class
     for i, label in enumerate(labels):
         metrics[f'precision_{label}'] = float(precision[i])
         metrics[f'recall_{label}'] = float(recall[i])
@@ -190,7 +181,7 @@ def calculate_metrics(y_true, y_pred, y_proba=None, labels=['credible', 'mislead
     # AUC (Area Under the ROC Curve): how well the model separates the classes overall
     if y_proba is not None:
         try:
-            # Encode string labels as numbers so roc_auc_score can work
+            # Encode string labels as numbers
             label_encoder = LabelEncoder()
             y_true_encoded = label_encoder.fit_transform(y_true)
             # Only compute AUC if all classes are present in this split
@@ -206,7 +197,6 @@ def calculate_metrics(y_true, y_pred, y_proba=None, labels=['credible', 'mislead
             metrics['auc_macro'] = 0.0
             metrics['auc_weighted'] = 0.0
     
-    # Exact match: identical to accuracy here, but kept separate for the report
     metrics['exact_match'] = float(np.mean(y_true == y_pred))
     
     # Top‑2 accuracy: we are "okay" if the correct class appears in the top 2 predictions
@@ -215,7 +205,6 @@ def calculate_metrics(y_true, y_pred, y_proba=None, labels=['credible', 'mislead
         y_true_encoded = label_encoder.transform(y_true)
         top2_correct = np.array([y_true_encoded[i] in top2_pred[i] for i in range(len(y_true))])
         metrics['top2_accuracy'] = float(np.mean(top2_correct))
-        # With exactly 3 classes, top‑3 accuracy is always equal to accuracy
         metrics['top3_accuracy'] = metrics['accuracy']
     
     # Confusion matrix: how often each true class is predicted as each possible class
@@ -303,22 +292,20 @@ def train_ml_models(X_train, X_test, y_train, y_test, label_encoder):
     
     return results
 
-# Train deep learning models (CNN and LSTM)
+# Train CNN and LSTM
 def train_dl_models(X_train, X_val, X_test, y_train, y_val, y_test, label_encoder):
-    """Trains CNN and LSTM models"""
     results = {}
     
     print("\n" + "="*60)
     print("Training Deep Learning Models")
     print("="*60)
 
-    # Make sure we have a folder to save models in
     os.makedirs('models/dl', exist_ok=True)
     
     # For DL models, we need to convert text to numbers ourselves
     from collections import Counter
     
-    # Build our own vocabulary from the data
+    # convert word to word id
     all_texts = X_train.tolist() + X_val.tolist() + X_test.tolist()
     word_counts = Counter()
     for text in all_texts:
@@ -328,7 +315,7 @@ def train_dl_models(X_train, X_val, X_test, y_train, y_val, y_test, label_encode
     # Keep top 10,000 most common words and assign them IDs
     vocab = {word: idx + 2 for idx, (word, _) in enumerate(word_counts.most_common(10000))}
     vocab['<PAD>'] = 0  # Padding for short sentences
-    vocab['<UNK>'] = 1  # Unknown words not in vocabulary
+    vocab['<UNK>'] = 1  # Unknown words
     vocab_size = len(vocab)
     
     def text_to_sequence(text, max_length=512):
@@ -342,7 +329,7 @@ def train_dl_models(X_train, X_val, X_test, y_train, y_val, y_test, label_encode
     X_val_seq = np.array([text_to_sequence(text) for text in X_val])
     X_test_seq = np.array([text_to_sequence(text) for text in X_test])
     
-    # PyTorch needs tensors, not numpy arrays
+    # CONVERT NUMPY TO PYTORCH TENSORS
     X_train_tensor = torch.LongTensor(X_train_seq)
     X_val_tensor = torch.LongTensor(X_val_seq)
     X_test_tensor = torch.LongTensor(X_test_seq)
@@ -351,7 +338,7 @@ def train_dl_models(X_train, X_val, X_test, y_train, y_val, y_test, label_encode
     y_test_tensor = torch.LongTensor(y_test)
     
     num_classes = len(label_encoder.classes_)
-    # Check if we have GPU available (makes training much faster)
+   
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # Train CNN model
@@ -389,12 +376,12 @@ def train_pytorch_model(model, X_train, X_val, X_test, y_train, y_val, y_test, d
     model = model.to(device)
     # Add label smoothing to reduce overconfidence (0.1 means 90% confidence max)
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
-    # Lower learning rate and add weight decay for regularization
+    # learning rate, penalizes large weights
     optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=0.01)
     
-    batch_size = 32
-    num_epochs = 15  # Increased epochs for better convergence
-    patience = 5  # More patience to avoid early stopping too soon
+    batch_size = 32        # Process 32 examples at a time
+    num_epochs = 15        # Train for 15 passes through data
+    patience = 5           # Stop if not improving for 5 epochs
     best_val_loss = float('inf')
     patience_counter = 0
     
@@ -423,17 +410,17 @@ def train_pytorch_model(model, X_train, X_val, X_test, y_train, y_val, y_test, d
             
             # Reset gradients
             optimizer.zero_grad()
-            # Forward pass - make predictions
+            # Forward pass
             outputs = model(batch_x)
-            # Calculate how wrong we were
+            # Calculate loss
             loss = criterion(outputs, batch_y)
-            # Backpropagate - figure out how to improve
+            # Backpropagate
             loss.backward()
             # Update weights
             optimizer.step()
             
             train_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
+            _, predicted = torch.max(outputs.data, 1)  # Get class with highest score
             train_total += batch_y.size(0)
             train_correct += (predicted == batch_y).sum().item()
         
@@ -442,13 +429,13 @@ def train_pytorch_model(model, X_train, X_val, X_test, y_train, y_val, y_test, d
         train_losses.append(train_loss)
         train_accs.append(train_acc)
         
-        # Check how well it does on validation data
+        # validation data
         model.eval()
         val_loss = 0
         val_correct = 0
         val_total = 0
         
-        with torch.no_grad():
+        with torch.no_grad(): # Don't calculate gradients
             for batch_x, batch_y in val_loader:
                 batch_x = batch_x.to(device)
                 batch_y = batch_y.to(device)
@@ -592,7 +579,7 @@ def train_transformer_model(X_train, X_val, X_test, y_train, y_val, y_test, labe
     print("Training Transformer Model (BioBERT)")
     print("="*60)
     
-    # Use BioBERT base model (pre-trained on medical text)
+    # Use BioBERT base model
     model_name = "dmis-lab/biobert-base-cased-v1.1"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     
@@ -606,8 +593,6 @@ def train_transformer_model(X_train, X_val, X_test, y_train, y_val, y_test, labe
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Loading model on device: {device}")
     
-    # Hack to fix a specific PyTorch loading bug (weights_only=True issue)
-    # This basically tells PyTorch "it's okay, just load it"
     import transformers.utils.import_utils as import_utils
     original_check = import_utils.check_torch_load_is_safe
     
@@ -625,26 +610,22 @@ def train_transformer_model(X_train, X_val, X_test, y_train, y_val, y_test, labe
     
     try:
         print("Loading model (this might take a minute)...")
-        # Try loading normally first
         try:
             model = AutoModelForSequenceClassification.from_pretrained(
                 model_name, num_labels=num_labels, use_safetensors=True
             )
         except:
-            # If that fails, use our bypass hack
             model = AutoModelForSequenceClassification.from_pretrained(
                 model_name, num_labels=num_labels
             )
     finally:
-        # Put things back to normal
         import_utils.check_torch_load_is_safe = original_check
         setattr(import_utils, 'check_torch_load_is_safe', original_check)
     
-    model.to(device)  # Explicitly move model to GPU if available
+    model.to(device) 
     print("Model loaded and moved to GPU")
     
-    # Set up training settings
-    # Use larger batches if we have a GPU
+
     batch_size = 16 if torch.cuda.is_available() else 4
     print(f"Using batch size: {batch_size}")
     
@@ -704,27 +685,21 @@ def train_transformer_model(X_train, X_val, X_test, y_train, y_val, y_test, labe
     
     metrics = calculate_metrics(y_test_labels, y_pred_labels, y_proba)
     
-    # Extract training history for plotting
     train_losses = [h['loss'] for h in history if 'loss' in h and 'eval_loss' not in h]
-    # Extract training accuracy from history (if available) or compute from train predictions
+    # Extract training accuracy from history
     train_accs = []
     if train_losses:
         # Try to get training accuracy from history
         for h in history:
             if 'loss' in h and 'eval_loss' not in h:
-                # Try to get training accuracy if logged
                 if 'train_accuracy' in h:
                     train_accs.append(h['train_accuracy'])
                 elif 'train_runtime' in h:
-                    # Fallback: approximate from validation accuracy trend
                     pass
         
-        # If we don't have training accuracy, estimate from validation trend
         if not train_accs or len(train_accs) != len(train_losses):
-            # Use validation accuracy as proxy (training is usually higher)
             val_accs_temp = [h['eval_accuracy'] for h in history if 'eval_accuracy' in h]
             if val_accs_temp:
-                # Training accuracy is typically 2-5% higher than validation
                 train_accs = [min(1.0, acc + 0.03) for acc in val_accs_temp[:len(train_losses)]]
             else:
                 train_accs = [0.85] * len(train_losses)  # Conservative estimate
@@ -749,20 +724,17 @@ def train_transformer_model(X_train, X_val, X_test, y_train, y_val, y_test, labe
             'BioBERT'
         )
     
-    # Save the trained BioBERT model so we can use it later
+    # Save the trained BioBERT model
     model.save_pretrained('models/transformer/biobert_final')  # Save model weights
     tokenizer.save_pretrained('models/transformer/biobert_final')  # Save tokenizer
     
-    # Return everything we need
     return {
         'model': model,
         'tokenizer': tokenizer,
         'metrics': metrics
     }
 
-# Create and save confusion matrix visualization
 def plot_confusion_matrix(cm, labels, model_name, save_path):
-    """Creates a heatmap showing which classes the model confuses"""
     # Create a new figure
     plt.figure(figsize=(8, 6))
     # Draw heatmap showing prediction errors
@@ -774,28 +746,26 @@ def plot_confusion_matrix(cm, labels, model_name, save_path):
     plt.tight_layout()
     # Save to file
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()  # Close to free memory
+    plt.close() 
 
-# Generate a comprehensive JSON report summarizing all model results
+
 def generate_summary_report(all_results, label_encoder):
-    """Creates a JSON file with all model metrics and comparisons"""
-    # Create results folder if it doesn't exist
+
     os.makedirs('results', exist_ok=True)
     
     # Build the summary structure
     summary = {
         'project_info': {
             'task': 'Medical Misinformation Detection',
-            'evaluation_date': datetime.now().isoformat(),  # When this was run
+            'evaluation_date': datetime.now().isoformat(), 
             'total_models': 0,
-            # Document which embedding technique each model type uses
             'embedding_techniques': {
                 'ml_models': 'TF-IDF Vectorization (ngram_range=(1,2), max_features=5000)',
                 'dl_models': 'Learned Word Embeddings (vocab-based, embedding_dim=128)',
                 'transformer': 'BioBERT Pre-trained Embeddings (dmis-lab/biobert-base-cased-v1.1)'
             }
         },
-        'models': {}  # Will store each model's results
+        'models': {} 
     }
     
     # Get label names
