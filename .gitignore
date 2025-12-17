@@ -2,6 +2,3 @@ data/
 results/
 models/
 api_keys.py
-__pycache__/
-*.pyc
-*.pyo
