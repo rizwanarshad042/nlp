@@ -1,3 +1,5 @@
+# Medical Misinformation Detection App
+# Core imports
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -10,12 +12,15 @@ import warnings
 import numpy as np
 np.warnings = warnings
 
+# Suppress sklearn warnings
 warnings.filterwarnings('ignore', category=UserWarning, module='sklearn')
 warnings.filterwarnings('ignore', message='.*InconsistentVersionWarning.*')
 warnings.filterwarnings('ignore', message='.*node array.*')
 
+
 os.environ['SKLEARN_ALLOW_DEPRECATED_SKLEARN_PACKAGE_INSTALL'] = 'True'
 
+# Project utilities
 from utils.labels import LABELS, LABEL_TO_ID, ID_TO_LABEL
 from utils.disease_integration import classify_with_disease_context, get_top_myths_and_facts, extract_disease_from_text
 from utils.disease_myths_facts import display_disease_myths_and_facts, generate_and_save_disease_content
