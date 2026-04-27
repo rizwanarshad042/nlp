@@ -22,15 +22,25 @@ os.environ['SKLEARN_ALLOW_DEPRECATED_SKLEARN_PACKAGE_INSTALL'] = 'True'
 
 # Project utilities
 from utils.labels import LABELS, LABEL_TO_ID, ID_TO_LABEL
-from utils.disease_integration import classify_with_disease_context, get_top_myths_and_facts, extract_disease_from_text
-from utils.disease_myths_facts import display_disease_myths_and_facts, generate_and_save_disease_content
-from utils.disease_myths_facts import save_to_dataset
-from advanced_data_augmentation import MedicalDataAugmenter
-from utils.disease_symptoms import get_symptoms, upsert_disease
-from utils.gemini_integration import gemini_explain_classification, check_gemini_api_key, gemini_list_symptoms, gemini_classify_statement
-from utils.feedback_storage import get_stored_label, store_feedback, store_feedback_with_tags
-from utils.symptom_disease_matcher import get_matcher
-from utils.unknown_disease_handler import handle_unknown_disease, get_unknown_disease_handler
+from utils.disease_integration import extract_disease_from_text
+from utils.disease_symptoms import get_symptoms
+from utils.gemini_integration import check_gemini_api_key, gemini_explain_classification
+from utils.disease_myths_facts import get_disease_myths_and_facts
+
+def save_to_dataset(*args, **kwargs):
+    return True
+
+
+def upsert_disease(*args, **kwargs):
+    return None
+
+
+def gemini_list_symptoms(*args, **kwargs):
+    return ""
+
+
+def generate_and_save_disease_content(*args, **kwargs):
+    return False, "Disease content generation has been removed."
 
 try:
     import torch
@@ -493,9 +503,7 @@ def main():
         
         nav_options = {
             'Classification': '🔍',
-            'Disease Symptoms': '🦠',
-            'Model Performance': '📈',
-            'RAG vs Non-RAG': '🤖'
+            'Model Performance': '📈'
         }
         
         for page_name, icon in nav_options.items():
@@ -513,12 +521,8 @@ def main():
     
     if page == "Classification":
         classification_page()
-    elif page == "Disease Symptoms":
-        disease_symptoms_page()
     elif page == "Model Performance":
         model_performance_page()
-    elif page == "RAG vs Non-RAG":
-        rag_comparison_page()
 
 
 def classification_page():
@@ -543,476 +547,7 @@ def classification_page():
         placeholder="e.g., 'Garlic cures COVID-19' or 'Vaccines prevent severe illness'",
         height=100
     )
-    auto_save = True
-    do_augment = False
-    augment_max = 5
-    
-    if st.button("Classify Statement", type="primary"):
-        if not statement.strip():
-            st.warning("Please enter a statement to classify.")
-            return
-        
-        with st.spinner("Analyzing statement..."):
-            stored_result = get_stored_label(statement, use_similarity=True)
-            stored_label = None
-            stored_similarity = 0.0
-            if stored_result:
-                stored_label, stored_similarity = stored_result
-            
-            # Always load all models (don't skip even if stored feedback exists)
-            all_predictions = {}
-            ordered_predictions = {}  # For ordered display
-
-            # 1. Load BioBERT first (Transformer)
-            if transformer_model is not None and tokenizer is not None:
-                transformer_pred = predict_transformer(statement, tokenizer, transformer_model)
-                if transformer_pred:
-                    all_predictions["BioBERT"] = transformer_pred
-                    ordered_predictions["BioBERT"] = transformer_pred
-            else:
-                st.warning("BioBERT model not available")
-            
-            # 2. Load DL models (CNN, LSTM)
-            if dl_bundle is not None:
-                dl_preds = predict_dl_models(statement, dl_bundle)
-                for model_name, preds in dl_preds.items():
-                    if model_name != "DL Ensemble":  # Show individual models, not ensemble
-                        all_predictions[model_name] = preds
-                        ordered_predictions[model_name] = preds
-            else:
-                st.warning("DL models not available")
-            
-            # 3. Load ML models last
-            if vectorizer is not None and logreg is not None and rf is not None:
-                ml_pred = predict_ml(statement, vectorizer, logreg, rf)
-                if ml_pred:
-                    all_predictions["ML Models"] = ml_pred
-                    ordered_predictions["ML Models"] = ml_pred
-            else:
-                st.warning("ML models not available")
-            
-            if not all_predictions:
-                st.error("No trained models available. Please train models first.")
-                return
-            
-            # Show stored feedback info if available, but still show all models
-            if stored_label:
-                if stored_similarity >= 1.0:
-                    st.info(f"📝 Note: Stored label available: **{stored_label.title()}** (exact match from previous feedback) - Showing all model predictions below")
-                else:
-                    st.info(f"📝 Note: Stored label available: **{stored_label.title()}** (similar statement, {stored_similarity:.1%} similarity) - Showing all model predictions below")
-            
-            st.subheader("Classification Results")
-            
-            # Display models in order: BioBERT, DL models, ML models
-            cols = st.columns(len(ordered_predictions))
-            
-            for i, (model_name, predictions) in enumerate(ordered_predictions.items()):
-                with cols[i]:
-                    st.markdown(f"**{model_name}**")
-                    
-                    best_label = max(predictions.keys(), key=lambda k: predictions[k])
-                    best_confidence = predictions[best_label]
-                    
-                    for label, prob in predictions.items():
-                        color = "green" if label == "credible" else "orange" if label == "misleading" else "red"
-                        st.progress(prob, text=f"{label.title()}: {prob:.2%}")
-                    
-                    if best_confidence > 0.6:
-                        st.success(f"Prediction: **{best_label.title()}** ({best_confidence:.2%})")
-                    elif best_confidence > 0.45:
-                        st.warning(f"Prediction: **{best_label.title()}** ({best_confidence:.2%})")
-                    else:
-                        st.info(f"Prediction: **{best_label.title()}** ({best_confidence:.2%}) - Low confidence")
-
-            # Final prediction: Use BioBERT if available, otherwise use weighted ensemble
-            st.markdown("---")
-            st.subheader("Final Prediction")
-            
-            # Priority: BioBERT > Weighted Ensemble > Single Model
-            if "BioBERT" in all_predictions:
-                # Use BioBERT as final prediction (highest priority)
-                biobert_preds = all_predictions["BioBERT"]
-                final_label = max(biobert_preds.keys(), key=lambda k: biobert_preds[k])
-                final_confidence = biobert_preds[final_label]
-                st.caption("Using BioBERT (Transformer) model prediction")
-            elif len(all_predictions) > 1:
-                # Fallback to weighted ensemble
-                model_weights = {
-                    "BioBERT": 0.55,
-                    "LSTM": 0.20,
-                    "CNN": 0.10,
-                    "ML Models": 0.15
-                }
-            
-                weighted_scores = {"credible": 0.0, "misleading": 0.0, "false": 0.0}
-                total_weight = 0.0
-                
-                for model_name, predictions in all_predictions.items():
-                    weight = model_weights.get(model_name, 0.0)
-                    if weight > 0:
-                        for label in ["credible", "misleading", "false"]:
-                            weighted_scores[label] += predictions.get(label, 0.0) * weight
-                        total_weight += weight
-                
-                if total_weight > 0:
-                    if total_weight < 1.0:
-                        for label in weighted_scores:
-                            weighted_scores[label] /= total_weight
-                
-                final_label = max(weighted_scores.keys(), key=lambda k: weighted_scores[k])
-                final_confidence = weighted_scores[final_label]
-                st.caption("Using weighted ensemble (BioBERT not available)")
-            elif len(all_predictions) == 1:
-                # Only one model available
-                single_model_preds = list(all_predictions.values())[0]
-                final_label = max(single_model_preds.keys(), key=lambda k: single_model_preds[k])
-                final_confidence = single_model_preds[final_label]
-                st.caption(f"Using {list(all_predictions.keys())[0]} model")
-            else:
-                final_label = None
-                final_confidence = 0.0
-
-            if final_label is not None:
-                if final_confidence > 0.6:
-                    st.success(f"**{final_label.title()}** ({final_confidence:.2%})")
-                elif final_confidence > 0.45:
-                    st.warning(f"**{final_label.title()}** ({final_confidence:.2%})")
-                else:
-                    st.info(f"**{final_label.title()}** ({final_confidence:.2%}) - Low confidence")
-            else:
-                st.info("No final prediction available.")
-            
-            st.subheader("Disease Analysis")
-            base_predictions = {}
-            if "ML Models" in all_predictions:
-                base_predictions = all_predictions["ML Models"]
-            elif all_predictions:
-                first_model_name = list(all_predictions.keys())[0]
-                base_predictions = all_predictions[first_model_name]
-
-            context_result = classify_with_disease_context(statement, base_predictions) if base_predictions else None
-
-            new_diseases_processed = {}
-            
-            try:
-                candidate_list = []
-                if context_result and context_result.get("diseases_found"):
-                    candidate_list = context_result["diseases_found"]
-                else:
-                    extracted_candidates = extract_disease_from_text(statement)
-                    if isinstance(extracted_candidates, str):
-                        candidate_list = [extracted_candidates]
-                    elif extracted_candidates:
-                        candidate_list = extracted_candidates
-
-                for disease in candidate_list:
-                    if not disease or len(disease.split()) > 5:
-                        continue
-                    # Try to get symptoms from database
-                    existing = get_symptoms(disease)
-                    # Also check if disease exists in disease_symptoms.csv with case-insensitive matching
-                    if not existing or str(existing).strip() == "" or str(existing).lower().startswith("symptoms not"):
-                        # Try case-insensitive lookup
-                        try:
-                            import pandas as pd
-                            if os.path.exists("disease_symptoms.csv"):
-                                df = pd.read_csv("disease_symptoms.csv")
-                                matched = df[df["disease_name"].str.lower() == disease.strip().lower()]
-                                if not matched.empty and "symptoms" in matched.columns:
-                                    existing = str(matched.iloc[0]["symptoms"])
-                                    if existing and existing.strip() and not existing.lower().startswith("symptoms not"):
-                                        # Found symptoms, add to processed diseases
-                                        new_diseases_processed[disease] = {
-                                            'symptoms': existing,
-                                            'matched_disease': None
-                                        }
-                                        continue
-                        except Exception as e:
-                            print(f"Error checking disease_symptoms.csv for {disease}: {e}")
-                    
-                    # If symptoms found, add to processed diseases
-                    if existing and str(existing).strip() and not str(existing).lower().startswith("symptoms not"):
-                        new_diseases_processed[disease] = {
-                            'symptoms': existing,
-                            'matched_disease': None
-                        }
-                        continue
-                    
-                    # Only try AI if symptoms not found
-                    if not existing or str(existing).strip() == "" or str(existing).lower().startswith("symptoms not"):
-                        if ai_available:
-                            try:
-                                # Use the unknown disease handler for comprehensive processing
-                                handler = get_unknown_disease_handler()
-                                result = handler.handle_unknown_disease_query(disease, save_to_db=True)
-                                
-                                if not result.get('error') and result.get('similar_disease'):
-                                    # Successfully found similar disease
-                                    similar_disease = result['similar_disease']
-                                    matched_disease_name = similar_disease['disease_name']
-                                    symptoms = result['symptoms']
-                                    
-                                    new_diseases_processed[disease] = {
-                                        'symptoms': symptoms,
-                                        'matched_disease': matched_disease_name,
-                                        'similarity_score': similar_disease['similarity_score'],
-                                        'myths_with_replacement': result.get('myths', []),
-                                        'facts_with_replacement': result.get('facts', [])
-                                    }
-                                    
-                                    # Disease already saved by handler
-                                    fact_statement = f"{disease} symptoms include: {symptoms}"
-                                    save_to_dataset(fact_statement, "credible", "ai_generated", "medical_fact", disease)
-                                    
-                                elif result.get('symptoms'):
-                                    # Got symptoms but no similar disease found
-                                    symptoms = result['symptoms']
-                                    new_diseases_processed[disease] = {
-                                        'symptoms': symptoms,
-                                        'matched_disease': None
-                                    }
-                                    upsert_disease(disease, symptoms)
-                                    fact_statement = f"{disease} symptoms include: {symptoms}"
-                                    save_to_dataset(fact_statement, "credible", "ai_generated", "medical_fact", disease)
-                                    
-                            except Exception as e:
-                                # Fallback to old method
-                                import traceback
-                                print(f"Error using unknown disease handler for {disease}: {e}")
-                                traceback.print_exc()
-                                
-                                try:
-                                    symptoms = gemini_list_symptoms(disease)
-                                    if symptoms and symptoms.strip():
-                                        matcher = get_matcher()
-                                        matched_diseases = matcher.match_symptoms_to_diseases(symptoms.strip(), top_k=1, min_similarity=0.3)
-                                        
-                                        if matched_diseases:
-                                            top_match = matched_diseases[0]
-                                            matched_disease_name = top_match['disease_name']
-                                            matched_symptoms = top_match['disease_symptoms']
-                                            
-                                            new_diseases_processed[disease] = {
-                                                'symptoms': matched_symptoms,
-                                                'matched_disease': matched_disease_name
-                                            }
-                                            
-                                            upsert_disease(disease, matched_symptoms)
-                                            fact_statement = f"{disease} symptoms include: {matched_symptoms}"
-                                            save_to_dataset(fact_statement, "credible", "ai_generated", "medical_fact", disease)
-                                        else:
-                                            new_diseases_processed[disease] = {
-                                                'symptoms': symptoms.strip(),
-                                                'matched_disease': None
-                                            }
-                                            upsert_disease(disease, symptoms.strip())
-                                            fact_statement = f"{disease} symptoms include: {symptoms.strip()}"
-                                            save_to_dataset(fact_statement, "credible", "ai_generated", "medical_fact", disease)
-                                except Exception:
-                                    pass
-                        else:
-                            symptoms = ""
-            except Exception as e:
-                import traceback
-                print(f"Error processing new disease: {e}")
-                traceback.print_exc()
-            
-            all_diseases = []
-            if context_result and context_result.get("diseases_found"):
-                all_diseases = context_result["diseases_found"]
-            
-            for new_disease in new_diseases_processed.keys():
-                if new_disease not in all_diseases:
-                    all_diseases.append(new_disease)
-            
-            if all_diseases:
-                st.write("**Diseases detected:**", ", ".join(all_diseases))
-
-                for disease in all_diseases:
-                    if disease in new_diseases_processed:
-                        symptoms = new_diseases_processed[disease]['symptoms']
-                        matched_disease = new_diseases_processed[disease].get('matched_disease')
-                    else:
-                        # Try to get from context_result first
-                        symptoms = context_result.get("disease_symptoms", {}).get(disease) if context_result else None
-                        # If not found, try direct lookup from CSV
-                        if not symptoms:
-                            try:
-                                symptoms = get_symptoms(disease)
-                            except Exception:
-                                symptoms = None
-                        matched_disease = None
-                    
-                    if symptoms and str(symptoms).strip() and not str(symptoms).lower().startswith("symptoms not"):
-                        st.write(f"**{disease.title()}** symptoms: {symptoms}")
-                    else:
-                        st.write(f"**{disease.title()}**: Symptoms not available")
-
-                for disease in all_diseases:
-                    if disease in new_diseases_processed:
-                        disease_info = new_diseases_processed[disease]
-                        matched_disease = disease_info.get('matched_disease')
-                        
-                        # Check if we have pre-replaced myths and facts from unknown disease handler
-                        if disease_info.get('myths_with_replacement') or disease_info.get('facts_with_replacement'):
-                            # Display custom myths and facts with replaced names
-                            st.markdown(f"### Information about {disease.title()}")
-                            
-                            if matched_disease:
-                                similarity_score = disease_info.get('similarity_score', 0)
-                                st.info(f"ℹ️ Based on {similarity_score:.0%} similarity with {matched_disease}. Disease names have been replaced in the information below.")
-                            
-                            col1, col2 = st.columns(2)
-                            
-                            with col1:
-                                st.markdown(f"**🔴 Common Myths**")
-                                myths = disease_info.get('myths_with_replacement', [])
-                                if myths:
-                                    for i, myth in enumerate(myths[:5], 1):
-                                        st.markdown(f"{i}. {myth}", unsafe_allow_html=True)
-                                else:
-                                    st.info("No myths found in database.")
-                            
-                            with col2:
-                                st.markdown(f"**✅ Medical Facts**")
-                                facts = disease_info.get('facts_with_replacement', [])
-                                if facts:
-                                    for i, fact in enumerate(facts[:5], 1):
-                                        st.markdown(f"{i}. {fact}", unsafe_allow_html=True)
-                                else:
-                                    st.info("No facts found in database.")
-                        
-                        elif matched_disease:
-                            # Use regular display with display_name
-                            display_disease_myths_and_facts(matched_disease, ai_available, ai_provider, display_name=disease)
-                        else:
-                            # Regular display
-                            display_disease_myths_and_facts(disease, ai_available, ai_provider)
-                    else:
-                        display_disease_myths_and_facts(disease, ai_available, ai_provider)
-                    
-            else:
-                st.info("No specific diseases detected in the statement.")
-            
-            best_overall_label = final_label
-            best_overall_confidence = final_confidence
-            
-            try:
-                detected_diseases = []
-                try:
-                    detected = classify_with_disease_context(statement, base_predictions) if base_predictions else None
-                    if detected and detected.get("diseases_found"):
-                        detected_diseases = detected["diseases_found"]
-                except Exception:
-                    detected_diseases = []
-                extracted_for_save = extract_disease_from_text(statement)
-                if isinstance(extracted_for_save, list) and extracted_for_save:
-                    extracted_for_save = extracted_for_save[0]
-                disease_tag = detected_diseases[0] if detected_diseases else (extracted_for_save if extracted_for_save else None)
-                topic_tag = "user_classified"
-                
-                if auto_save and best_overall_label:
-                    save_to_dataset(statement, best_overall_label, "user_input", topic_tag, disease_tag)
-                
-                if do_augment and best_overall_label:
-                    augmenter = MedicalDataAugmenter()
-                    variants = augmenter.create_semantic_variations(statement)
-                    variants = variants[:int(augment_max)]
-                    saved_count = 0
-                    for v in variants:
-                        if v and v.strip() and v.strip() != statement.strip():
-                            save_to_dataset(v.strip(), best_overall_label, "user_augmented", topic_tag, disease_tag)
-                            saved_count += 1
-                    st.info(f"Augmented and saved {saved_count} variants")
-            except Exception as e:
-                st.warning(f"Could not save/augment dataset: {e}")
-            
-            if ai_available and best_overall_label and best_overall_confidence > 0.4:
-                st.subheader("🤖 AI Explanation")
-                with st.spinner("Generating AI explanation..."):
-                    try:
-                        explanation = gemini_explain_classification(statement, best_overall_label, best_overall_confidence)
-                        
-                        # Use custom styled containers for better appearance
-                        if best_overall_label == "credible":
-                            st.markdown("""
-                            <div style='background-color: #1e3a5f; padding: 20px; border-radius: 10px; border-left: 5px solid #4CAF50; margin: 10px 0;'>
-                                <h4 style='color: #4CAF50; margin-top: 0;'>✅ Credible Statement Explanation</h4>
-                                <p style='color: #e0e0e0; line-height: 1.6;'>{}</p>
-                            </div>
-                            """.format(explanation.replace('\n', '<br>')), unsafe_allow_html=True)
-                        elif best_overall_label == "misleading":
-                            st.markdown("""
-                            <div style='background-color: #3d2f1f; padding: 20px; border-radius: 10px; border-left: 5px solid #FF9800; margin: 10px 0;'>
-                                <h4 style='color: #FF9800; margin-top: 0;'>Misleading Statement Explanation</h4>
-                                <p style='color: #e0e0e0; line-height: 1.6;'>{}</p>
-                            </div>
-                            """.format(explanation.replace('\n', '<br>')), unsafe_allow_html=True)
-                        else:  # false
-                            st.markdown("""
-                            <div style='background-color: #3d1f1f; padding: 20px; border-radius: 10px; border-left: 5px solid #f44336; margin: 10px 0;'>
-                                <h4 style='color: #f44336; margin-top: 0;'>❌ False Statement Explanation</h4>
-                                <p style='color: #e0e0e0; line-height: 1.6;'>{}</p>
-                            </div>
-                            """.format(explanation.replace('\n', '<br>')), unsafe_allow_html=True)
-                        
-                        with st.spinner("Getting AI classification for comparison..."):
-                            try:
-                                ai_label = gemini_classify_statement(statement)
-                                if ai_label and ai_label != best_overall_label:
-                                    st.markdown("""
-                                    <div style='background-color: #3d2f1f; padding: 15px; border-radius: 8px; border-left: 5px solid #FF9800; margin: 10px 0;'>
-                                        <p style='color: #FF9800; margin: 0;'><strong>Discrepancy Detected:</strong> Model predicted '<strong>{}</strong>' but AI classified as '<strong>{}</strong>'. Storing AI's classification for future use.</p>
-                                    </div>
-                                    """.format(best_overall_label.title(), ai_label.title()), unsafe_allow_html=True)
-                                    
-                                    # Extract topic and disease for proper tagging
-                                    # extract_disease_from_text and classify_with_disease_context already imported at top
-                                    
-                                    # Get topic classification (use same logic as in process_and_label_data)
-                                    topic_keywords = {
-                                        'covid_19': ['covid', 'coronavirus', 'pandemic', 'sars-cov-2'],
-                                        'vaccines': ['vaccine', 'vaccination', 'immunization', 'shot'],
-                                        'cancer': ['cancer', 'tumor', 'chemotherapy', 'oncology'],
-                                        'mental_health': ['mental', 'depression', 'anxiety', 'psychology'],
-                                        'diabetes': ['diabetes', 'diabetic', 'blood sugar', 'glucose'],
-                                        'heart_disease': ['heart', 'cardiac', 'cardiovascular', 'hypertension'],
-                                        'nutrition': ['diet', 'nutrition', 'food', 'vitamin'],
-                                    }
-                                    text_lower = statement.lower()
-                                    topic = 'general_health'
-                                    for topic_name, keywords in topic_keywords.items():
-                                        if any(keyword in text_lower for keyword in keywords):
-                                            topic = topic_name
-                                            break
-                                    
-                                    # Extract disease
-                                    diseases = extract_disease_from_text(statement)
-                                    disease_tag = diseases[0] if diseases else None
-                                    
-                                    # Store with proper tagging
-                                    from utils.feedback_storage import store_feedback_with_tags
-                                    store_feedback_with_tags(statement, ai_label, "ai_feedback", topic, disease_tag)
-                                    
-                                    st.markdown("""
-                                    <div style='background-color: #1e3a5f; padding: 15px; border-radius: 8px; border-left: 5px solid #4CAF50; margin: 10px 0;'>
-                                        <p style='color: #4CAF50; margin: 0;'><strong>✅ Stored correct label:</strong> <strong>{}</strong> with topic: {}, disease: {} - This will be used for this statement in the future.</p>
-                                    </div>
-                                    """.format(ai_label.title(), topic, disease_tag or 'N/A'), unsafe_allow_html=True)
-                                elif ai_label and ai_label == best_overall_label:
-                                    st.info(f"AI classification matches model prediction: **{ai_label.title()}**")
-                            except Exception as e:
-                                import traceback
-                                print(f"Error in AI comparison: {e}")
-                                traceback.print_exc()
-                                pass
-                            
-                    except Exception as e:
-                        st.error(f"Could not generate AI explanation: {e}")
-            elif not ai_available:
-                st.subheader("🤖 AI Explanation")
-                st.info("💡 AI explanation not available. Please set up Groq API key to enable AI-powered explanations for all classification results.")
+    return
 
 
 
@@ -1176,6 +711,149 @@ def disease_symptoms_page():
                 st.warning("Please provide both disease name and symptoms.")
 
 
+def classification_page():
+    st.header("🔍 Medical Statement Analysis")
+
+    ai_available, ai_message, ai_provider = check_ai_availability()
+    if not ai_available:
+        st.warning(f"AI Integration Unavailable: {ai_message}")
+
+    with st.spinner("Loading models..."):
+        tokenizer, transformer_model = load_transformer_model()
+        vectorizer, logreg, rf = load_ml_models()
+        dl_bundle = load_dl_models()
+
+    statement = st.text_area(
+        "Paste or type your medical statement here:",
+        placeholder="e.g., 'Garlic cures COVID-19' or 'Vaccines prevent severe illness'",
+        height=120,
+    )
+
+    def merge_predictions(prediction_sets):
+        totals = {label: 0.0 for label in LABELS}
+        total_weight = 0.0
+        weights = {
+            'ML': 0.35,
+            'DL': 0.30,
+            'Transformer': 0.35,
+        }
+
+        for model_name, scores in prediction_sets.items():
+            weight = weights.get(model_name, 0.2)
+            total_weight += weight
+            for label, score in scores.items():
+                if label in totals:
+                    totals[label] += score * weight
+
+        if total_weight > 0:
+            for label in totals:
+                totals[label] /= total_weight
+
+        best_label = max(totals, key=totals.get)
+        return best_label, float(totals[best_label]), totals
+
+    if st.button("Analyze Statement", type="primary"):
+        if not statement.strip():
+            st.warning("Please enter a statement to analyze.")
+            return
+
+        prediction_sets = {}
+
+        if vectorizer and logreg and rf:
+            try:
+                prediction_sets['ML'] = predict_ml(statement, vectorizer, logreg, rf)
+            except Exception as exc:
+                st.warning(f"ML prediction failed: {exc}")
+
+        if dl_bundle:
+            try:
+                dl_predictions = predict_dl_models(statement, dl_bundle)
+                if dl_predictions:
+                    averaged = {label: 0.0 for label in LABELS}
+                    count = 0
+                    for probs in dl_predictions.values():
+                        count += 1
+                        for label, score in probs.items():
+                            if label in averaged:
+                                averaged[label] += score
+                    if count > 0:
+                        for label in averaged:
+                            averaged[label] /= count
+                        prediction_sets['DL'] = averaged
+            except Exception as exc:
+                st.warning(f"DL prediction failed: {exc}")
+
+        if tokenizer and transformer_model:
+            try:
+                transformer_probs = predict_transformer(statement, tokenizer, transformer_model)
+                if transformer_probs:
+                    prediction_sets['Transformer'] = transformer_probs
+            except Exception as exc:
+                st.warning(f"Transformer prediction failed: {exc}")
+
+        st.subheader("1. Classification")
+        if prediction_sets:
+            final_label, final_confidence, combined_scores = merge_predictions(prediction_sets)
+            st.success(f"**{final_label.title()}** ({final_confidence:.2%})")
+            st.caption("Combined from available trained models")
+            st.bar_chart(pd.DataFrame([combined_scores]))
+        else:
+            final_label = 'credible'
+            final_confidence = 0.0
+            st.info("No trained models were available. Falling back to symptom lookup only.")
+
+        diseases = extract_disease_from_text(statement)
+        st.subheader("2. Disease Symptoms")
+        if diseases:
+            for disease in diseases:
+                symptoms = get_symptoms(disease)
+                if symptoms and str(symptoms).strip() and not str(symptoms).lower().startswith("symptoms not"):
+                    st.write(f"**{disease.title()}** symptoms: {symptoms}")
+                else:
+                    st.write(f"**{disease.title()}**: Symptoms not available")
+        else:
+            st.info("No specific disease was detected in the statement.")
+
+        st.subheader("3. AI Explanation")
+        if ai_available:
+            try:
+                explanation = gemini_explain_classification(statement, final_label, final_confidence)
+                st.write(explanation)
+            except Exception as exc:
+                st.warning(f"AI explanation could not be generated: {exc}")
+        else:
+            st.info("AI explanation unavailable.")
+
+        st.subheader("4. Myths and Facts")
+        if diseases:
+            for disease in diseases[:1]:
+                myths_facts = get_disease_myths_and_facts(disease, ai_available=ai_available, ai_provider=ai_provider)
+                myths = (myths_facts.get('myths') or [])[:5]
+                facts = (myths_facts.get('facts') or [])[:5]
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(f"**Myths about {disease.title()}**")
+                    if myths:
+                        for idx, myth in enumerate(myths, 1):
+                            st.write(f"{idx}. {myth}")
+                    else:
+                        st.info("No myths found.")
+                with col2:
+                    st.markdown(f"**Facts about {disease.title()}**")
+                    if facts:
+                        for idx, fact in enumerate(facts, 1):
+                            st.write(f"{idx}. {fact}")
+                    else:
+                        st.info("No facts found.")
+        else:
+            st.info("Myths and facts are shown after a disease is detected in the statement.")
+
+
+def rag_comparison_page():
+    st.info("RAG comparison has been removed from the app.")
+
+
 def model_performance_page():
     st.header("📈 Model Performance")
     
@@ -1260,234 +938,42 @@ def model_performance_page():
 
 
 def rag_comparison_page():
-    st.header("🤖 RAG vs Non-RAG Evaluation")
-    st.markdown("---")
-    
-    comparison_path = "data/processed/rag_vs_nonrag_comparison.csv"
-    detailed_path = "data/processed/rag_vs_nonrag_detailed.csv"
-    
-    if not os.path.exists(comparison_path):
-        st.error("RAG comparison results not found. Please run the RAG evaluation first.")
-        st.info("Run `python evaluate_rag_local.py` to generate the comparison results.")
-        return
-    
-    # Load comparison data
-    comparison_df = pd.read_csv(comparison_path)
-    detailed_df = pd.read_csv(detailed_path) if os.path.exists(detailed_path) else None
-    
-    st.subheader("Summary Comparison")
-    st.caption("Average metrics across 50 QA pairs evaluated")
-    
-    # Get data
-    rag_row = comparison_df[comparison_df['Model'] == 'RAG'].iloc[0]
-    baseline_row = comparison_df[comparison_df['Model'] == 'Non-RAG (Baseline)'].iloc[0]
-    
-    # Display metrics comparison in a better format
-    col1, col2, col3, col4 = st.columns(4)
-    
-    metrics_data = [
-        ("Factuality", rag_row['Factuality'], baseline_row['Factuality']),
-        ("Completeness", rag_row['Completeness'], baseline_row['Completeness']),
-        ("Faithfulness", rag_row['Faithfulness'], baseline_row['Faithfulness']),
-        ("Safety", rag_row['Safety'], baseline_row['Safety'])
-    ]
-    
-    for i, (metric_name, rag_val, baseline_val) in enumerate(metrics_data):
-        with [col1, col2, col3, col4][i]:
-            improvement = rag_val - baseline_val
-            improvement_pct = (improvement / baseline_val * 100) if baseline_val > 0 else 0
-            
-            st.markdown(f"### {metric_name}")
-            
-            # RAG score
-            st.markdown(f"""
-            <div style='background-color: #1e3a5f; padding: 15px; border-radius: 8px; border-left: 4px solid #4CAF50; margin-bottom: 10px;'>
-                <p style='color: #4CAF50; margin: 0; font-weight: bold; font-size: 18px;'>RAG: {rag_val:.4f}</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Baseline score
-            st.markdown(f"""
-            <div style='background-color: #3d2f1f; padding: 15px; border-radius: 8px; border-left: 4px solid #FF9800; margin-bottom: 10px;'>
-                <p style='color: #FF9800; margin: 0; font-weight: bold; font-size: 18px;'>Baseline: {baseline_val:.4f}</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Improvement
-            if improvement > 0:
-                st.markdown(f"""
-                <div style='background-color: #1e3a1e; padding: 10px; border-radius: 6px;'>
-                    <p style='color: #4CAF50; margin: 0;'>📈 Improvement: +{improvement:.4f} ({improvement_pct:.1f}%)</p>
-                </div>
-                """, unsafe_allow_html=True)
-            elif improvement < 0:
-                st.markdown(f"""
-                <div style='background-color: #3d1f1f; padding: 10px; border-radius: 6px;'>
-                    <p style='color: #f44336; margin: 0;'>📉 Difference: {improvement:.4f}</p>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown(f"""
-                <div style='background-color: #2d2d2d; padding: 10px; border-radius: 6px;'>
-                    <p style='color: #9e9e9e; margin: 0;'>➡️ No difference</p>
-                </div>
-                """, unsafe_allow_html=True)
-    
-    st.markdown("---")
-    
-    # Summary table
-    st.subheader("📋 Comparison Table")
-    summary_table = pd.DataFrame({
-        'Metric': ['Factuality', 'Completeness', 'Faithfulness', 'Safety'],
-        'RAG': [
-            f"{rag_row['Factuality']:.4f}",
-            f"{rag_row['Completeness']:.4f}",
-            f"{rag_row['Faithfulness']:.4f}",
-            f"{rag_row['Safety']:.4f}"
-        ],
-        'Non-RAG Baseline': [
-            f"{baseline_row['Factuality']:.4f}",
-            f"{baseline_row['Completeness']:.4f}",
-            f"{baseline_row['Faithfulness']:.4f}",
-            f"{baseline_row['Safety']:.4f}"
-        ],
-        'Improvement': [
-            f"+{rag_row['Factuality'] - baseline_row['Factuality']:.4f}",
-            f"+{rag_row['Completeness'] - baseline_row['Completeness']:.4f}",
-            f"+{rag_row['Faithfulness'] - baseline_row['Faithfulness']:.4f}",
-            f"{rag_row['Safety'] - baseline_row['Safety']:.4f}"
-        ]
-    })
-    st.dataframe(summary_table, use_container_width=True, hide_index=True)
-    
-    st.markdown("---")
-    
-    # Visual comparison chart
-    st.subheader("📈 Visual Comparison")
-    
-    metrics = ['Factuality', 'Completeness', 'Faithfulness', 'Safety']
-    rag_values = [rag_row[m] for m in metrics]
-    baseline_values = [baseline_row[m] for m in metrics]
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        name='RAG',
-        x=metrics,
-        y=rag_values,
-        marker_color='#1f77b4',
-        text=[f'{v:.4f}' for v in rag_values],
-        textposition='auto',
-    ))
-    
-    fig.add_trace(go.Bar(
-        name='Non-RAG Baseline',
-        x=metrics,
-        y=baseline_values,
-        marker_color='#ff7f0e',
-        text=[f'{v:.4f}' for v in baseline_values],
-        textposition='auto',
-    ))
-    
-    fig.update_layout(
-        title='RAG vs Non-RAG Performance Comparison',
-        xaxis_title='Metrics',
-        yaxis_title='Score',
-        barmode='group',
-        height=450,
-        showlegend=True,
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='white', size=12),
-        xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
-        yaxis=dict(gridcolor='rgba(255,255,255,0.1)')
+    st.info("RAG comparison has been removed from the app.")
+
+
+def classification_page():
+    st.header("🦠 Disease Symptoms Lookup")
+    st.write("Enter a medical statement and only the matched disease symptoms will be shown.")
+
+    statement = st.text_area(
+        "Paste or type your medical statement here:",
+        placeholder="e.g., 'Garlic cures COVID-19' or 'Vaccines prevent severe illness'",
+        height=120,
     )
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    st.markdown("---")
-    
-    # Key findings
-    st.subheader("🔍 Key Findings")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.success("**RAG Advantages:**")
-        if rag_row['Factuality'] > baseline_row['Factuality']:
-            st.write(f"**Factuality**: {((rag_row['Factuality'] / baseline_row['Factuality'] - 1) * 100):.1f}% higher")
-        if rag_row['Completeness'] > baseline_row['Completeness']:
-            st.write(f"**Completeness**: {((rag_row['Completeness'] / baseline_row['Completeness'] - 1) * 100):.1f}% higher")
-        if rag_row['Faithfulness'] > baseline_row['Faithfulness']:
-            st.write(f"**Faithfulness**: Perfect (1.0) - All answers grounded in retrieved sources")
-        if rag_row['Safety'] == baseline_row['Safety']:
-            st.write(f"**Safety**: Both models are safe (1.0)")
-    
-    with col2:
-        st.info("**Non-RAG Baseline:**")
-        st.write(f"• Generic safe response")
-        st.write(f"• No retrieval mechanism")
-        st.write(f"• Faithfulness: 0.0 (no source grounding)")
-        st.write(f"• Lower factuality and completeness")
-    
-    st.markdown("---")
-    
-    # Detailed results
-    if detailed_df is not None and len(detailed_df) > 0:
-        st.subheader("📋 Detailed Results")
-        st.caption(f"Showing results for {len(detailed_df)} QA pairs")
-        
-        # Allow user to filter/view specific QA pairs
-        with st.expander("View All QA Pair Results", expanded=False):
-            # Display in a more readable format
-            for idx, row in detailed_df.iterrows():
-                st.markdown(f"### QA Pair {idx + 1}")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown("**RAG Model:**")
-                    st.write(f"**Question:** {row['question']}")
-                    st.write(f"**Answer:** {row['rag_answer'][:200]}..." if len(str(row['rag_answer'])) > 200 else f"**Answer:** {row['rag_answer']}")
-                    st.metric("Factuality", f"{row['rag_factuality']:.4f}")
-                    st.metric("Completeness", f"{row['rag_completeness']:.4f}")
-                    st.metric("Faithfulness", f"{row['rag_faithfulness']:.4f}")
-                    st.metric("Safety", f"{row['rag_safety']:.4f}")
-                
-                with col2:
-                    st.markdown("**Non-RAG Baseline:**")
-                    st.write(f"**Question:** {row['question']}")
-                    st.write(f"**Answer:** {row['nonrag_answer']}")
-                    st.metric("Factuality", f"{row['nonrag_factuality']:.4f}")
-                    st.metric("Completeness", f"{row['nonrag_completeness']:.4f}")
-                    st.metric("Faithfulness", f"{row['nonrag_faithfulness']:.4f}")
-                    st.metric("Safety", f"{row['nonrag_safety']:.4f}")
-                
-                st.markdown("---")
-        
-        # Summary statistics
-        st.subheader("Summary Statistics")
-        
-        summary_cols = st.columns(4)
-        
-        with summary_cols[0]:
-            st.metric("Average RAG Factuality", f"{detailed_df['rag_factuality'].mean():.4f}")
-            st.metric("Average Baseline Factuality", f"{detailed_df['nonrag_factuality'].mean():.4f}")
-        
-        with summary_cols[1]:
-            st.metric("Average RAG Completeness", f"{detailed_df['rag_completeness'].mean():.4f}")
-            st.metric("Average Baseline Completeness", f"{detailed_df['nonrag_completeness'].mean():.4f}")
-        
-        with summary_cols[2]:
-            st.metric("Average RAG Faithfulness", f"{detailed_df['rag_faithfulness'].mean():.4f}")
-            st.metric("Average Baseline Faithfulness", f"{detailed_df['nonrag_faithfulness'].mean():.4f}")
-        
-        with summary_cols[3]:
-            st.metric("RAG Safety Rate", f"{detailed_df['rag_safety'].mean():.2%}")
-            st.metric("Baseline Safety Rate", f"{detailed_df['nonrag_safety'].mean():.2%}")
-    
-    st.markdown("---")
-    st.info("💡 **Note:** RAG system uses TF-IDF retrieval from credible medical texts. Non-RAG baseline provides generic safe responses without retrieval.")
+
+    if st.button("Show Symptoms", type="primary"):
+        if not statement.strip():
+            st.warning("Please enter a statement first.")
+            return
+
+        diseases = extract_disease_from_text(statement)
+
+        if not diseases:
+            st.info("No specific diseases were detected in the statement.")
+            return
+
+        st.write("**Diseases detected:**", ", ".join(diseases))
+
+        for disease in diseases:
+            symptoms = get_symptoms(disease)
+            if symptoms and str(symptoms).strip() and not str(symptoms).lower().startswith("symptoms not"):
+                st.write(f"**{disease.title()}** symptoms: {symptoms}")
+            else:
+                st.write(f"**{disease.title()}**: Symptoms not available")
+
+
+def disease_symptoms_page():
+    st.info("This page has been removed. Use Classification to look up symptoms from a statement.")
 
 
 if __name__ == "__main__":

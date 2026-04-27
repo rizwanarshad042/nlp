@@ -8,6 +8,7 @@ from pathlib import Path
 from datetime import datetime
 import re
 import random
+import importlib
 from collections import Counter, defaultdict
 
 # Import shared medical content filter
@@ -30,6 +31,7 @@ LABEL_TARGETS = {
     'false': 12000,
     'misleading': 8000
 }
+VALID_LABELS = {'credible', 'misleading', 'false'}
 SOURCE_SAMPLE_LIMITS = {
     'kaggle_unknown': 20000,
     'kaggle_fake_true_news': 15000,
@@ -39,6 +41,27 @@ SOURCE_SAMPLE_LIMITS = {
     'med_mmhl': 6000,
     'covid_misinfo_claims': 6000
 }
+
+HF_LABELED_DATASETS = [
+    {
+        'name': 'ClassyB/Health_Misinformation',
+        'source': 'hf_health_misinformation',
+        'text_field_candidates': ['Statement', 'statement', 'claim', 'text'],
+        'label_field_candidates': ['True or Misinformation', 'label', 'rating']
+    },
+    {
+        'name': 'justinqbui/covid_fact_checked_polifact',
+        'source': 'hf_covid_polifact',
+        'text_field_candidates': ['claim', 'statement', 'text'],
+        'label_field_candidates': ['rating', 'adjusted rating', 'label']
+    },
+    {
+        'name': 'justinqbui/covid_fact_checked_google_api',
+        'source': 'hf_covid_google_factcheck',
+        'text_field_candidates': ['text', 'claim', 'statement'],
+        'label_field_candidates': ['label', 'rating']
+    },
+]
 random.seed(42)
 np.random.seed(42)
 
@@ -197,14 +220,222 @@ def normalize_label_value(label_text: str, default_label='credible'):
     """Normalize textual labels into credible/misleading/false."""
     if not label_text:
         return default_label
-    label_text = str(label_text).lower()
-    if label_text in ['true', 'support', 'supports', 'proven', 'accurate', 'positive']:
-        return 'credible'
-    if label_text in ['false', 'fake', 'refute', 'refutes', 'negative', 'hoax', 'inaccurate']:
+
+    raw = str(label_text).strip().lower()
+    cleaned = re.sub(r'[^a-z0-9\s_\-]', ' ', raw)
+    cleaned = cleaned.replace('-', ' ')
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+
+    direct_map = {
+        'credible': 'credible',
+        'true': 'credible',
+        'real': 'credible',
+        'supports': 'credible',
+        'support': 'credible',
+        'accurate': 'credible',
+        'mostly true': 'credible',
+        'partly true': 'misleading',
+        'half true': 'misleading',
+        'mixed': 'misleading',
+        'mixture': 'misleading',
+        'misleading': 'misleading',
+        'unproven': 'misleading',
+        'uncertain': 'misleading',
+        'not enough info': 'misleading',
+        'false': 'false',
+        'fake': 'false',
+        'refute': 'false',
+        'refutes': 'false',
+        'hoax': 'false',
+        'debunked': 'false',
+        'inaccurate': 'false',
+    }
+
+    if cleaned in direct_map:
+        return direct_map[cleaned]
+
+    # Only exact numeric labels are interpreted; substring matching is unsafe.
+    if cleaned in {'0', '1', '2'}:
+        numeric_map = {'0': 'false', '1': 'credible', '2': 'misleading'}
+        return numeric_map[cleaned]
+
+    if any(token in cleaned for token in ['false', 'fake', 'hoax', 'debunk', 'refute', 'incorrect']):
         return 'false'
-    if label_text in ['misleading', 'partly true', 'mixture', 'unproven', 'not enough info']:
+    if any(token in cleaned for token in ['mislead', 'partly', 'mixed', 'unproven', 'uncertain']):
         return 'misleading'
+    if any(token in cleaned for token in ['true', 'credible', 'real', 'support', 'accurate', 'fact']):
+        return 'credible'
+
     return default_label
+
+
+def normalize_hf_label_value(label_text, default_label='credible'):
+    """Normalize Hugging Face dataset labels into credible/misleading/false."""
+    if label_text is None:
+        return default_label
+
+    if isinstance(label_text, (int, float, np.integer, np.floating)):
+        numeric_map = {
+            0: 'false',
+            1: 'credible',
+            2: 'misleading',
+        }
+        return numeric_map.get(int(label_text), default_label)
+
+    normalized = str(label_text).strip().lower()
+    normalized = re.sub(r'[^a-z0-9\s_\-]', ' ', normalized)
+    normalized = normalized.replace('-', ' ')
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+
+    hf_map = {
+        'supports': 'credible',
+        'support': 'credible',
+        'entailment': 'credible',
+        'true': 'credible',
+        'mostly true': 'misleading',
+        'refutes': 'false',
+        'refute': 'false',
+        'contradiction': 'false',
+        'false': 'false',
+        'fake': 'false',
+        'misinformation': 'false',
+        'mostly false': 'false',
+        'pants fire': 'false',
+        'barely true': 'misleading',
+        'half true': 'misleading',
+        'pants on fire': 'false',
+        'full flop': 'false',
+        'mixture': 'misleading',
+        'mixed': 'misleading',
+        'partly true': 'misleading',
+        'half true': 'misleading',
+        'not enough info': 'misleading',
+        'not enough information': 'misleading',
+        'nei': 'misleading',
+        'unproven': 'misleading',
+        'misleading': 'misleading',
+    }
+
+    if normalized in hf_map:
+        return hf_map[normalized]
+
+    return normalize_label_value(normalized, default_label)
+
+
+def _pick_first_available_text_field(row: dict, field_candidates: list):
+    for field in field_candidates:
+        value = row.get(field)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _pick_first_available_label_field(row: dict, field_candidates: list):
+    for field in field_candidates:
+        if field in row and row.get(field) is not None:
+            value = row.get(field)
+            if str(value).strip() != '':
+                return value
+    return None
+
+
+def process_huggingface_labeled_datasets(max_records_per_dataset: int = 25000):
+    """Download and process labeled datasets directly from Hugging Face."""
+    records = []
+
+    try:
+        datasets_module = importlib.import_module('datasets')
+        load_dataset = getattr(datasets_module, 'load_dataset')
+    except Exception:
+        print("   Hugging Face 'datasets' package not available; skipping online dataset import.")
+        return records
+
+    for ds in HF_LABELED_DATASETS:
+        dataset_name = ds['name']
+        source_name = ds['source']
+        text_candidates = ds['text_field_candidates']
+        label_candidates = ds.get('label_field_candidates', ['label', 'veracity', 'rating', 'verdict'])
+        dataset_records = 0
+
+        try:
+            print(f"   Importing Hugging Face dataset: {dataset_name}")
+            dataset_dict = load_dataset(dataset_name)
+
+            for split_name, split_data in dataset_dict.items():
+                for row in split_data:
+                    text = _pick_first_available_text_field(row, text_candidates)
+                    if not text or len(text) < 20:
+                        continue
+                    # For imported fact-check data, keep moderately medical claims too.
+                    if not is_medical_content(text, min_medical_keywords=1, strict_mode=False):
+                        continue
+
+                    raw_label = _pick_first_available_label_field(row, label_candidates) if isinstance(row, dict) else None
+
+                    label = normalize_hf_label_value(raw_label, default_label='credible')
+                    if label not in VALID_LABELS:
+                        continue
+
+                    records.append({
+                        'text': text[:10000],
+                        'label': label,
+                        'source': source_name,
+                        'topic': classify_topic(text),
+                        'disease': extract_disease_from_text(text),
+                        'timestamp': datetime.now().isoformat()
+                    })
+                    dataset_records += 1
+
+                    if dataset_records >= max_records_per_dataset:
+                        break
+
+                if dataset_records >= max_records_per_dataset:
+                    break
+
+            print(f"   Imported {dataset_records} records from {dataset_name}")
+        except Exception as exc:
+            print(f"   Could not import {dataset_name}: {exc}")
+
+    return expand_records_to_claims(records)
+
+
+def clean_and_validate_records(df: pd.DataFrame, stage_name: str = 'dataset') -> pd.DataFrame:
+    """Apply strict quality gates to reduce noisy and mislabeled samples."""
+    if df.empty:
+        return df
+
+    before = len(df)
+
+    for col in ['text', 'label', 'source', 'topic', 'disease', 'timestamp']:
+        if col not in df.columns:
+            df[col] = None
+
+    df = df.copy()
+    df['text'] = df['text'].astype(str).str.replace(r'\s+', ' ', regex=True).str.strip()
+    df['label'] = df['label'].apply(lambda v: normalize_label_value(v, 'credible'))
+
+    df = df[df['text'].str.len() >= 20]
+    df = df[df['text'].str.len() <= 10000]
+    df = df[df['label'].isin(VALID_LABELS)]
+
+    # Keep only clearly medical rows; strict mode blocks generic/news noise.
+    df = df[df['text'].apply(lambda t: is_medical_content(t, min_medical_keywords=2, strict_mode=True))]
+    df['medical_keyword_count'] = df['text'].apply(get_medical_keyword_count)
+    df['medical_score'] = df['text'].apply(get_medical_content_score)
+    df = df[(df['medical_keyword_count'] >= 2) & (df['medical_score'] >= 0.25)]
+
+    # Resolve duplicate texts by keeping the highest-confidence variant.
+    df['text_norm'] = df['text'].str.lower()
+    df = df.sort_values(
+        by=['text_norm', 'medical_score', 'medical_keyword_count'],
+        ascending=[True, False, False]
+    )
+    df = df.drop_duplicates(subset=['text_norm'], keep='first')
+
+    df = df.drop(columns=['text_norm', 'medical_keyword_count', 'medical_score'], errors='ignore')
+    after = len(df)
+    print(f"   Data quality gate ({stage_name}): kept {after}/{before} rows ({before - after} removed)")
+    return df.reset_index(drop=True)
 
 # generate sentences for each disease in our dataset
 def generate_synthetic_claims(max_per_disease: int = 15):
@@ -360,19 +591,9 @@ def process_kaggle_datasets():
                     
                     # Get label
                     if label_col and label_col in row:
-                        label = str(row[label_col]).lower()
-                        if label not in ['credible', 'misleading', 'false']:
-                            label = SOURCE_LABEL_MAP.get(source, 'credible')
+                        label = normalize_label_value(row[label_col], SOURCE_LABEL_MAP.get(source, 'credible'))
                     else:
                         label = SOURCE_LABEL_MAP.get(source, 'credible')
-                    
-                    # Normalize label
-                    if 'false' in label or 'fake' in label:
-                        label = 'false'
-                    elif 'mislead' in label or 'myth' in label:
-                        label = 'misleading'
-                    else:
-                        label = 'credible'
                     
                     records.append({
                         'text': text[:10000], 
@@ -567,19 +788,9 @@ def process_github_datasets():
                         
                         # Get label
                         if label_col and label_col in row:
-                            label = str(row[label_col]).lower()
-                            if label not in ['credible', 'misleading', 'false']:
-                                label = default_label
+                            label = normalize_label_value(row[label_col], default_label)
                         else:
                             label = default_label
-                        
-                        # Normalize
-                        if 'false' in label or 'fake' in label or '0' in str(label):
-                            label = 'false'
-                        elif 'mislead' in label or 'myth' in label or '1' in str(label):
-                            label = 'misleading'
-                        else:
-                            label = 'credible'
                         
                         records.append({
                             'text': text[:10000],
@@ -665,6 +876,11 @@ def process_raw_csv_data():
             text = str(row['text']).strip()
             source_file = str(row.get('source_file', 'unknown')).lower()
             source_type = str(row.get('source_type', 'unknown'))
+
+            if len(text) < 20:
+                continue
+            if not is_medical_content(text, min_medical_keywords=2, strict_mode=True):
+                continue
             
             source = 'unknown'
             label = 'credible' 
@@ -782,6 +998,8 @@ def process_raw_csv_data():
             # Use SOURCE_LABEL_MAP if available
             if source in SOURCE_LABEL_MAP:
                 label = SOURCE_LABEL_MAP[source]
+
+            label = normalize_label_value(label, 'credible')
             
             records.append({
                 'text': text[:10000],
@@ -834,6 +1052,11 @@ def integrate_all_data():
         jsonl_records = process_jsonl_datasets()
         print(f"   Found {len(jsonl_records)} records from JSONL files")
         all_records.extend(jsonl_records)
+
+    print("\n1e. Importing Hugging Face labeled datasets...")
+    hf_records = process_huggingface_labeled_datasets(max_records_per_dataset=25000)
+    print(f"   Found {len(hf_records)} records from Hugging Face datasets")
+    all_records.extend(hf_records)
     
     print("\n2. Generating synthetic statements...")
     synthetic_records = generate_synthetic_claims(max_per_disease=30)
@@ -853,6 +1076,7 @@ def integrate_all_data():
     
     if not new_df.empty:
         print(f"\nTotal collected statements before limiting: {len(new_df)}")
+        new_df = clean_and_validate_records(new_df, stage_name='pre-dedup')
         new_df = new_df.drop_duplicates(subset=['text'], keep='first')
         print(f"\n3. After deduplication: {len(new_df)} unique records")
         
@@ -872,6 +1096,7 @@ def integrate_all_data():
             combined_df = new_df
         
         combined_df = combined_df.sample(frac=1, random_state=42).reset_index(drop=True)
+        combined_df = clean_and_validate_records(combined_df, stage_name='final')
         combined_df = apply_source_limits(combined_df)
         combined_df = rebalance_labels(combined_df)
         print_label_summary(combined_df, "FINAL LABEL COUNTS")

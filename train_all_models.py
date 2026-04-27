@@ -12,6 +12,7 @@ import joblib
 # Importing Classic ML tools (Scikit‑learn)
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
+from sklearn.neural_network import MLPClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score, precision_recall_fscore_support,
@@ -27,6 +28,8 @@ from transformers import (
     AutoTokenizer, AutoModelForSequenceClassification,
     TrainingArguments, Trainer, EarlyStoppingCallback
 )
+
+from utils.medical_content_filter import is_medical_content, get_medical_content_score
 
 np.random.seed(42)
 torch.manual_seed(42)
@@ -138,11 +141,22 @@ def load_and_prepare_data():
     
     # Drop unlabel rows
     df = df[df['label'].notna()]
+    df = df[df['text'].notna()]
+    df['text'] = df['text'].astype(str).str.replace(r'\s+', ' ', regex=True).str.strip()
+    df['label'] = df['label'].astype(str).str.lower().str.strip()
+
     # Keep only three labels
     df = df[df['label'].isin(['credible', 'misleading', 'false'])]
     
     # remove short sentences
-    df = df[df['text'].str.len() > 10]
+    df = df[df['text'].str.len() > 20]
+
+    # Remove low-confidence medical rows and duplicate text variants.
+    df = df[df['text'].apply(lambda t: is_medical_content(t, min_medical_keywords=2, strict_mode=True))]
+    df['medical_score'] = df['text'].apply(get_medical_content_score)
+    df = df[df['medical_score'] >= 0.25]
+    df = df.sort_values(by='medical_score', ascending=False)
+    df = df.drop_duplicates(subset=['text'], keep='first').drop(columns=['medical_score'])
     
     print(f"Total samples: {len(df)}")
     print(f"Label distribution:\n{df['label'].value_counts()}")
@@ -289,6 +303,36 @@ def train_ml_models(X_train, X_test, y_train, y_test, label_encoder):
     
     print(f"   Accuracy: {metrics_rf['accuracy']:.4f}")
     print(f"   F1-Macro: {metrics_rf['f1_macro']:.4f}")
+
+    print("\n3. Training ANN (MLPClassifier)...")
+    ann_model = MLPClassifier(
+        hidden_layer_sizes=(256, 128),
+        activation='relu',
+        solver='adam',
+        alpha=1e-4,
+        batch_size=64,
+        learning_rate_init=1e-3,
+        max_iter=25,
+        early_stopping=True,
+        n_iter_no_change=3,
+        random_state=42,
+        verbose=False
+    )
+    ann_model.fit(X_train_tfidf, y_train)
+
+    y_pred_ann = ann_model.predict(X_test_tfidf)
+    y_proba_ann = ann_model.predict_proba(X_test_tfidf)
+    y_pred_ann_labels = label_encoder.inverse_transform(y_pred_ann)
+
+    metrics_ann = calculate_metrics(y_test_labels, y_pred_ann_labels, y_proba_ann, labels=label_names)
+    results['ann'] = {
+        'model': ann_model,
+        'vectorizer': vectorizer,
+        'metrics': metrics_ann
+    }
+
+    print(f"   Accuracy: {metrics_ann['accuracy']:.4f}")
+    print(f"   F1-Macro: {metrics_ann['f1_macro']:.4f}")
     
     return results
 
@@ -870,6 +914,9 @@ def save_results(all_results, label_encoder):
                         joblib.dump(model, 'models/ml/logistic_regression.pkl')
                         joblib.dump(vectorizer, 'models/ml/tfidf_vectorizer.pkl')
                         print(f"\nSaved Logistic Regression model and vectorizer to models/ml/")
+                    elif model_name == 'ann':
+                        joblib.dump(model, 'models/ml/ann.pkl')
+                        print(f"\nSaved ANN model to models/ml/")
                     elif model_name == 'random_forest':
                         joblib.dump(model, 'models/ml/random_forest.pkl')
                         print(f"\nSaved Random Forest model to models/ml/")
