@@ -182,7 +182,7 @@ def render_sidebar():
 
 
 def render_classification_page():
-    st.title("Medical Statement Classifier")
+    st.title("Medical Misinformation Detection")
     st.caption("CNN + RNN ensemble prediction with per-label confidence scores")
 
     try:
@@ -193,11 +193,7 @@ def render_classification_page():
         st.info("Required files: cnn_final.pt, rnn_final.pt, vocabulary.json, metrics_summary.json")
         return
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.metric("Device", str(assets["device"]))
-    with col_b:
-        st.metric("Labels", ", ".join(assets["labels"]))
+
 
     with st.expander("Loaded artifacts"):
         st.write(f"CNN model: {assets['cnn_model_path']}")
@@ -205,7 +201,7 @@ def render_classification_page():
 
     statement = st.text_area(
         "Enter a medical statement",
-        placeholder="Example: Drinking warm water cures all viral infections.",
+        placeholder="Example: Regular exercise and a balanced diet can help reduce the risk of heart disease.",
         height=120,
     )
 
@@ -261,23 +257,31 @@ def render_classification_page():
         st.markdown("### AI Explanation")
         st.markdown(
             f"""
-            <div style="padding: 0.85rem 1rem; border-radius: 0.75rem; background: #e8f7ef; border: 1px solid #b7e4c7; margin-bottom: 1rem;">
-                <div style="font-size: 0.9rem; font-weight: 700; color: #1b4332; text-transform: uppercase; letter-spacing: 0.04em;">Correct Label</div>
-                <div style="font-size: 1.25rem; font-weight: 800; color: #081c15; margin-top: 0.15rem;">{labels[final_idx]}</div>
+            <div style="padding: 0.85rem 1rem; border-radius: 0.75rem; background: #e3f2fd; border: 1px solid #90caf9; margin-bottom: 1rem;">
+                <div style="font-size: 0.9rem; font-weight: 700; color: #1565c0; text-transform: uppercase; letter-spacing: 0.04em;">Model Prediction</div>
+                <div style="font-size: 1.25rem; font-weight: 800; color: #0d47a1; margin-top: 0.15rem;">{labels[final_idx]} ({final_probs[final_idx]:.2%})</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
         api_ready, api_message = check_gemini_api_key()
         if api_ready:
-            with st.spinner("Generating Gemini explanation..."):
+            with st.spinner("Generating Gemini fact-check..."):
                 explanation = gemini_explain_classification(
                     statement,
                     labels[final_idx],
                     float(final_probs[final_idx]),
                 )
             if explanation:
-                st.write(explanation)
+                st.markdown(
+                    f"""
+                    <div style="padding: 0.85rem 1rem; border-radius: 0.75rem; background: #f3e5f5; border: 1px solid #ce93d8; margin-bottom: 1rem;">
+                        <div style="font-size: 0.9rem; font-weight: 700; color: #6a1b9a; text-transform: uppercase; letter-spacing: 0.04em;">Is Prediction Correct?</div>
+                        <div style="font-size: 1rem; color: #4a148c; margin-top: 0.5rem;">{explanation}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
             else:
                 st.warning("Gemini did not return an explanation.")
         else:
