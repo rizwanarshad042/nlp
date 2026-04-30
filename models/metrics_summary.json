@@ -1,0 +1,89 @@
+{
+  "CNN": {
+    "accuracy": 0.8711994868505453,
+    "precision_macro": 0.8880224669688189,
+    "recall_macro": 0.8281760514424749,
+    "f1_macro": 0.8541401648433348,
+    "precision_weighted": 0.8715021693818442,
+    "recall_weighted": 0.8711994868505453,
+    "f1_weighted": 0.8683198966649014,
+    "precision_credible": 0.8672650878533231,
+    "recall_credible": 0.9470281543274244,
+    "f1_credible": 0.9053932808294288,
+    "precision_misleading": 0.7977675640183848,
+    "recall_misleading": 0.675,
+    "f1_misleading": 0.7312669274751731,
+    "precision_false": 0.999034749034749,
+    "recall_false": 0.8625,
+    "f1_false": 0.9257602862254025,
+    "auc_macro": 0.9485997833569976,
+    "auc_weighted": 0.9438046732311127,
+    "confusion_matrix": [
+      [
+        4541,
+        253,
+        1
+      ],
+      [
+        585,
+        1215,
+        0
+      ],
+      [
+        110,
+        55,
+        1035
+      ]
+    ]
+  },
+  "RNN": {
+    "accuracy": 0.6151379089159718,
+    "precision_macro": 0.20504596963865726,
+    "recall_macro": 0.3333333333333333,
+    "f1_macro": 0.25390521577971936,
+    "precision_weighted": 0.3783946469855144,
+    "recall_weighted": 0.6151379089159718,
+    "f1_weighted": 0.46856017049278553,
+    "precision_credible": 0.6151379089159718,
+    "recall_credible": 1.0,
+    "f1_credible": 0.7617156473391581,
+    "precision_misleading": 0.0,
+    "recall_misleading": 0.0,
+    "f1_misleading": 0.0,
+    "precision_false": 0.0,
+    "recall_false": 0.0,
+    "f1_false": 0.0,
+    "auc_macro": 0.6121615814805645,
+    "auc_weighted": 0.6050186778502814,
+    "confusion_matrix": [
+      [
+        4795,
+        0,
+        0
+      ],
+      [
+        1800,
+        0,
+        0
+      ],
+      [
+        1200,
+        0,
+        0
+      ]
+    ]
+  },
+  "vocab_size": 10002,
+  "max_seq_length": 512,
+  "class_names": [
+    "credible",
+    "misleading",
+    "false"
+  ],
+  "label_encoder_classes": [
+    "credible",
+    "false",
+    "misleading"
+  ],
+  "timestamp": "2026-04-30T14:21:15.151821"
+}
